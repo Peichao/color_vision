@@ -1,30 +1,17 @@
+import functions
 import numpy as np
-import scipy.io as sio
-import h5py
-import pandas as pd
-import matplotlib.pyplot as plt
 
-array_file = '/Users/anupam/Library/Mobile Documents/' \
-             'com~apple~CloudDocs/Documents/Callaway Lab/color_vision/imageArray.mat'
-exp_params_file = '/Users/anupam/Library/Mobile Documents/' \
-                  'com~apple~CloudDocs/Documents/Callaway Lab/color_vision/2016.9.9xx0_008_003.mat'
+image_path = 'E:/color_vision/images/'
+image_array = np.load(image_path + 'image_array.npy')
 
-# imageArray = sio.loadmat(array_file, squeeze_me=True, struct_as_record=False)['imageArray']
-exp_params = sio.loadmat(exp_params_file, squeeze_me=True, struct_as_record=False)['randlog_T1']
-imageArray_hdf5 = h5py.File(array_file, 'r')
-imageArray = imageArray_hdf5['imageArray']
+params_path = 'E:/color_vision/20160914/2016.9.14xx0_010_000.mat'
+data_path = 'E:/color_vision/20160915_photodiode2_g0_t0.nidq.bin'
 
-for i, hdf5object in enumerate(imageArray_hdf5['imageArray'][()][0]):
-    imageArray[i] = hdf5object[()]
+trials = functions.get_params(params_path)
+# trials['stim_sample'] = functions.get_stim_samples(data_path)
+# trials['stim_time'] = trials.stim_sample / 25000
+trials['stim_time'] = np.arange(0, 600, 0.02)
 
-columns = ['quadrant', 'kx', 'ky', 'bit', 'color']
-conds = pd.DataFrame(exp_params.domains.Cond, columns=columns)
-
-trials = pd.DataFrame(exp_params.seqs.frameseq, columns=['cond'])
-trials -= 1
-
-trials['quadrant'] = trials.cond.map(conds['quadrant'])
-trials['kx'] = trials.cond.map(conds['kx'])
-trials['ky'] = trials.cond.map(conds['ky'])
-trials['bit'] = trials.cond.map(conds['bit'])
-trials['color'] = trials.cond.map(conds['color'])
+spike_times = np.random.uniform(20, 500, size=5000)
+p = functions.PlotRF(trials, spike_times, image_array)
+p.show()

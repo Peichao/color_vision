@@ -1,7 +1,6 @@
 import numpy as np
 import scipy.io as sio
 import pandas as pd
-import matplotlib.pyplot as plt
 
 array_file = '/Users/anupam/Downloads/imageArray.mat'
 exp_params_file = '/Users/anupam/Downloads/xx0_001_002.mat'
