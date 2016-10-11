@@ -117,20 +117,26 @@ def get_mean_point(x, y, trials, spike_times, image_array):
     return mean_point
 
 
-def get_stim_samples(file_path):
+def get_stim_samples_fh(data_path):
     """
     Get starting sample index of each 20ms pulse from photodiode.
     :param file_path: String. Path to binary file from recording.
     :return: np.ndarray. Starting times of each stimulus (1 x nStimuli).
     """
-    data = (np.memmap(file_path, np.int16, mode='r').reshape(-1, 129)).T
+    data = (np.memmap(data_path, np.int16, mode='r').reshape(-1, 129)).T
     data = pd.DataFrame(data[128, :], columns=['photodiode'])
 
-    from detect_peaks import detect_peaks
-    peaks = detect_peaks(data.photodiode, mph=1100, mpd=200)
+    hi_cut = 1500
+    lo_cut = 800
 
-    peaks_high = peaks[np.where(data.photodiode[peaks] > 1500)]
-    peaks_low = peaks[np.where(np.logical_and(data.photodiode[peaks] > 1100, data.photodiode[peaks] < 1500))]
+    from detect_peaks import detect_peaks
+    peaks = detect_peaks(data.photodiode, mph=lo_cut, mpd=200)
+
+    # import peakutils as peakutils
+    # peaks = peakutils.indexes(data.photodiode, thres=(1100/data.photodiode.max()), min_dist=200)
+
+    peaks_high = peaks[np.where(data.photodiode[peaks] > hi_cut)]
+    peaks_low = peaks[np.where(np.logical_and(data.photodiode[peaks] > lo_cut, data.photodiode[peaks] < hi_cut))]
 
     # In case of signal creep, remove all low peaks between trials
     # Edited to keep peaks due to stuck frames and only remove if final peak to peak distance > 500 (due to end pulse)
@@ -164,6 +170,75 @@ def get_stim_samples(file_path):
     return stim_times
 
 
+def get_stim_samples_pg(data_path, start_time, end_time):
+    data = (np.memmap(data_path, np.int16, mode='r').reshape(-1, 129)).T
+
+    if end_time[0] > 0:
+        data = pd.DataFrame(data[128, start_time * 60 * 25000:end_time * 60 * 25000], columns=['photodiode'])
+    else:
+        data = pd.DataFrame(data[128, :], columns=['photodiode'])
+
+
+    from detect_peaks import detect_peaks
+    peaks = detect_peaks(data.photodiode, mph=1500, mpd=200)
+    fst = np.array([peaks[1]])
+    stim_times_remaining = peaks[np.where(np.diff(peaks) > 10000)[0]] + 1
+    stim_times = np.append(fst, stim_times_remaining)
+    # dropped = np.where(np.diff(peaks) < 500)[0]
+    # peaks_correct = np.delete(peaks, dropped + 1)
+    # stim_times = peaks_correct[1::19]
+    return stim_times
+
+
+def analyzer_pg(analyzer_path):
+    analyzer_complete = sio.loadmat(analyzer_path, squeeze_me=True, struct_as_record=False)
+    analyzer = analyzer_complete['Analyzer']
+
+    b_flag = 0
+    if analyzer.loops.conds[len(analyzer.loops.conds) - 1].symbol[0] == 'blank':
+        b_flag = 1
+
+    if b_flag == 0:
+        trial_num = np.zeros((len(analyzer.loops.conds) * len(analyzer.loops.conds[0].repeats),
+                             (len(analyzer.loops.conds[0].symbol))))
+    else:
+        trial_num = np.zeros(((len(analyzer.loops.conds) - b_flag) * len(analyzer.loops.conds[0].repeats) +
+                              len(analyzer.loops.conds[-1].repeats),
+                              (len(analyzer.loops.conds[0].symbol))))
+
+    for count in range(0, len(analyzer.loops.conds) - b_flag):
+        trial_vals = np.zeros(len(analyzer.loops.conds[count].symbol))
+
+        for count2 in range(0, len(analyzer.loops.conds[count].symbol)):
+            trial_vals[count2] = analyzer.loops.conds[count].val[count2]
+
+        for count3 in range(0, len(analyzer.loops.conds[count].repeats)):
+            aux_trial = analyzer.loops.conds[count].repeats[count3].trialno
+            trial_num[aux_trial - 1, :] = trial_vals
+
+    for blank_trial in range(0, len(analyzer.loops.conds[-1].repeats)):
+        aux_trial = analyzer.loops.conds[-1].repeats[blank_trial].trialno
+        trial_num[aux_trial - 1, :] = np.array([256, 256])
+
+    stim_time = np.zeros(3)
+    for count4 in range(0, 3):
+        stim_time[count4] = analyzer.P.param[count4][2]
+
+    return trial_num, stim_time
+
+
+def jrclust_csv(csv_path):
+    sp = pd.read_csv(csv_path, names=['time', 'cluster', 'max_site'])
+    return sp
+
+
+def kilosort_info(data_folder):
+    sp = pd.DataFrame()
+    sp['time'] = np.load(data_folder + 'spike_times.npy').flatten() / 25000
+    sp['cluster'] = np.load(data_folder + 'spike_clusters.npy')
+    return sp
+
+
 class PlotRF(object):
     """
     Use reverse correlation to plot average stimulus preceding spikes from each unit.
@@ -188,7 +263,8 @@ class PlotRF(object):
         self.slider.drawon = False
 
         self.trials = trials
-        self.spike_times = spike_times
+        self.spike_times = spike_times[(spike_times > trials.stim_time.min() + 0.2) &
+                                       (spike_times < trials.stim_time.max())]
         self.image_array = image_array
         self.starting_image = get_mean_image(self.trials, self.spike_times, self.image_array)
 
