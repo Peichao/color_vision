@@ -173,11 +173,10 @@ def get_stim_samples_fh(data_path):
 def get_stim_samples_pg(data_path, start_time, end_time):
     data = (np.memmap(data_path, np.int16, mode='r').reshape(-1, 129)).T
 
-    if end_time[0] > 0:
+    if end_time.values[0] > 0:
         data = pd.DataFrame(data[128, start_time * 60 * 25000:end_time * 60 * 25000], columns=['photodiode'])
     else:
         data = pd.DataFrame(data[128, :], columns=['photodiode'])
-
 
     from detect_peaks import detect_peaks
     peaks = detect_peaks(data.photodiode, mph=1500, mpd=200)
