@@ -117,14 +117,14 @@ def get_mean_point(x, y, trials, spike_times, image_array):
     return mean_point
 
 
-def get_stim_samples_fh(data_path):
+def get_stim_samples_fh(data_path, start_time, end_time):
     """
     Get starting sample index of each 20ms pulse from photodiode.
     :param file_path: String. Path to binary file from recording.
     :return: np.ndarray. Starting times of each stimulus (1 x nStimuli).
     """
     data = (np.memmap(data_path, np.int16, mode='r').reshape(-1, 129)).T
-    data = pd.DataFrame(data[128, :], columns=['photodiode'])
+    data = pd.DataFrame(data[128, start_time * 60 * 25000:end_time * 60 * 25000], columns=['photodiode'])
 
     hi_cut = 1500
     lo_cut = 800
@@ -166,26 +166,28 @@ def get_stim_samples_fh(data_path):
     data_peaks['low'] = data_peaks.photodiode < 1500
     low = data_peaks.index[data_peaks['low'] & ~ data_peaks['low'].shift(1).fillna(False)]
 
-    stim_times = np.sort(np.concatenate([high, low]))
+    stim_times = np.sort(np.concatenate([high, low])) + (start_time * 60 * 25000)
     return stim_times
 
 
-def get_stim_samples_pg(data_path, start_time, end_time):
+def get_stim_samples_pg(data_path, start_time, end_time=None):
     data = (np.memmap(data_path, np.int16, mode='r').reshape(-1, 129)).T
 
-    if end_time.values[0] > 0:
+    if end_time is not None:
         data = pd.DataFrame(data[128, start_time * 60 * 25000:end_time * 60 * 25000], columns=['photodiode'])
     else:
         data = pd.DataFrame(data[128, :], columns=['photodiode'])
 
     from detect_peaks import detect_peaks
     peaks = detect_peaks(data.photodiode, mph=1500, mpd=200)
-    fst = np.array([peaks[1]])
-    stim_times_remaining = peaks[np.where(np.diff(peaks) > 10000)[0]] + 1
+    fst = np.array([peaks[0]])
+    stim_times_remaining = peaks[np.where(np.diff(peaks) > 10000)[0] + 1]
     stim_times = np.append(fst, stim_times_remaining)
+    stim_times += (start_time * 60 * 25000)
     # dropped = np.where(np.diff(peaks) < 500)[0]
     # peaks_correct = np.delete(peaks, dropped + 1)
     # stim_times = peaks_correct[1::19]
+
     return stim_times
 
 
@@ -316,3 +318,22 @@ class PlotRF(object):
         :return: Image displayed.
         """
         plt.show()
+
+
+class GetLayers(object):
+    """
+    Plot CSD in interactive manner and allow clicks to get bottom and top of layer 4C.
+    """
+
+    def __init__(self, csd_data=None):
+        self.x = None
+        self.y = None
+
+        self.csd_data = csd_data
+
+    def onpick(self, event):
+        artist = event.artist
+        if isinstance(artist, AxesImage):
+            mouse_event = event.mouseevent
+            self.x = int(np.round(mouse_event.xdata))
+            self.y = int(np.round(mouse_event.ydata))
