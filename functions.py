@@ -1,3 +1,4 @@
+import os
 import glob
 import numpy as np
 import scipy.io as sio
@@ -11,13 +12,18 @@ matplotlib.rcParams['pdf.fonttype'] = 42
 plt.style.use('ggplot')
 
 
-def get_params(file_path):
+def get_params(file_path, analyzer_path):
     """
     Input path to mat file from stimulus computer that contains trial sequence info.
     :param file_path: String. File path for mat file from stimulus computer.
     :return: pandas.DataFrame. DataFrame containing all stimulus sequence information.
     """
     exp_params_all = sio.loadmat(file_path, squeeze_me=True, struct_as_record=False)
+    analyzer_complete = sio.loadmat(analyzer_path, squeeze_me=True, struct_as_record=False)
+    analyzer = analyzer_complete['Analyzer']
+
+    x_size = analyzer.P.param[5][2]
+    y_size = analyzer.P.param[6][2]
 
     # Create list of all trials from mat file.
     r_seed = []
@@ -32,8 +38,6 @@ def get_params(file_path):
         columns = ['quadrant', 'kx', 'ky', 'bwdom', 'color']
         conds = pd.DataFrame(exp_params.domains.Cond, columns=columns)
         trials = pd.DataFrame(exp_params.seqs.frameseq, columns=['cond'])
-        x_size = exp_params.domains.x_size
-        y_size = exp_params.domains.y_size
         trials -= 1
 
         for column in columns:
@@ -117,17 +121,20 @@ def get_mean_point(x, y, trials, spike_times, image_array):
     return mean_point
 
 
-def get_stim_samples_fh(data_path, start_time, end_time):
+def get_stim_samples_fh(data_path, start_time, end_time=None):
     """
     Get starting sample index of each 20ms pulse from photodiode.
     :param file_path: String. Path to binary file from recording.
     :return: np.ndarray. Starting times of each stimulus (1 x nStimuli).
     """
     data = (np.memmap(data_path, np.int16, mode='r').reshape(-1, 129)).T
-    data = pd.DataFrame(data[128, start_time * 60 * 25000:end_time * 60 * 25000], columns=['photodiode'])
+    if end_time is not None:
+        data = pd.DataFrame(data[128, start_time * 25000:end_time * 25000], columns=['photodiode'])
+    else:
+        data = pd.DataFrame(data[128, start_time * 25000:], columns=['photodiode'])
 
     hi_cut = 1500
-    lo_cut = 800
+    lo_cut = 600
 
     from detect_peaks import detect_peaks
     peaks = detect_peaks(data.photodiode, mph=lo_cut, mpd=200)
@@ -167,6 +174,9 @@ def get_stim_samples_fh(data_path, start_time, end_time):
     low = data_peaks.index[data_peaks['low'] & ~ data_peaks['low'].shift(1).fillna(False)]
 
     stim_times = np.sort(np.concatenate([high, low])) + (start_time * 60 * 25000)
+
+    data_folder = os.path.dirname(data_path)
+    np.save(data_folder + '/stim_samples.npy', data_folder)
     return stim_times
 
 
@@ -187,6 +197,8 @@ def get_stim_samples_pg(data_path, start_time, end_time=None):
     # dropped = np.where(np.diff(peaks) < 500)[0]
     # peaks_correct = np.delete(peaks, dropped + 1)
     # stim_times = peaks_correct[1::19]
+
+    np.save(os.path.dirname(data_path) + '/stim_samples.npy', stim_times)
 
     return stim_times
 
@@ -324,6 +336,7 @@ class GetLayers(object):
     """
     Plot CSD in interactive manner and allow clicks to get bottom and top of layer 4C.
     """
+    # TODO write code to get bottom and top of granular layers
 
     def __init__(self, csd_data=None):
         self.x = None
@@ -337,3 +350,92 @@ class GetLayers(object):
             mouse_event = event.mouseevent
             self.x = int(np.round(mouse_event.xdata))
             self.y = int(np.round(mouse_event.ydata))
+
+
+def xcorr(a, b, maxlag=50, spacing=1):
+    """
+    Computes cross-correlation of spike times held in vector a and b with shift ms precision
+    :param a: first array to be compared
+    :param b: second array to be compared
+    :param maxlag: maximum time shift to compute
+    :param spacing: spacing between time shifts
+    :return: index of time shifts and array of number of occurrences
+    """
+    xcorr_array = np.zeros((maxlag/spacing * 2) + 1)
+    index = np.arange(-maxlag, maxlag + 1)
+    for i in np.arange(0, maxlag+1, spacing):
+        if i == 0:
+            common = np.intersect1d(a, b).size
+            xcorr_array[maxlag] = common
+        else:
+            bins_sub = np.concatenate((a - (i-spacing), a-i))
+            bins_sub.sort()
+            bins_add = np.concatenate((a + (i-spacing), a+i+0.0001))
+            bins_add.sort()
+
+            hist_sub = np.histogram(b, bins_sub)[0][0::2].sum()
+            hist_add = np.histogram(b, bins_add)[0][0::2].sum()
+
+            xcorr_array[np.abs(i-maxlag)] = hist_sub
+            xcorr_array[i + maxlag] = hist_add
+
+    return xcorr_array, index
+
+
+def xcorr_spiketime_all(sp, maxlag=50, spacing=1):
+    """
+    Computes cross-correlation using spike times, computes all possible combinations between many pairs of neurons.
+    :param sp: pandas.DataFrame of all spike times
+    :param maxlag: maximum time shift to compute
+    :param spacing: spacing between time shifts
+    :return:
+        dictionary of correlation, dictionary of indexes
+    """
+    from itertools import combinations
+
+    clusters = sp[sp.cluster > 0].cluster.unique()
+    clusters.sort()
+    comb = list(combinations(clusters, 2))
+
+    xcorr_dict = {}
+    index_dict = {}
+
+    for i in comb:
+        xcorr_array, index = xcorr(sp[sp.cluster == i[0]].time, sp[sp.cluster == i[1]], maxlag, spacing)
+        xcorr_dict[i] = xcorr_array
+        index_dict[i] = index
+
+    return xcorr_dict, index_dict
+
+
+def xcorr_sp(sp, maxlags=50, shift=1):
+    # TODO add ability to compute correlation probability based on shuffled correlogram
+    """
+    Computes cross-correlation using spike bins, computes all possible combinations between many pairs of neurons.
+    :param sp: pandas.DataFrame of all spike times
+    :param maxlag: maximum time shift to compute
+    :param spacing: spacing between time shifts
+    :return:
+        dictionary of correlation, dictionary of indexes
+    """
+    sp['time_ms'] = sp.time * 1000
+    binned = pd.DataFrame()
+    bins = np.arange(0, int(np.ceil(sp.time_ms.max())))
+    for i in np.sort(sp[sp.cluster > 0].cluster.unique()):
+        binned[i] = np.histogram(sp[sp.cluster == i].time_ms, bins)[0]
+
+    index = np.arange(-maxlags, maxlags+1, shift)
+    from itertools import combinations
+    xcorr = pd.DataFrame(0, index=index, columns=list(combinations(binned.columns, 2)))
+
+    count = 0
+    for i in binned.columns:
+        nonzero_bins = binned[i].nonzero()[0]
+        for j in np.arange(maxlags+1):
+            corr_add = binned.loc[nonzero_bins + j].sum().as_matrix()
+            corr_sub = binned.loc[nonzero_bins - j].sum().as_matrix()
+
+            xcorr.loc[j, xcorr.columns[count:count+binned.columns.max()-i]] = corr_add[i:]
+            xcorr.loc[-j, xcorr.columns[count:count+binned.columns.max()-i]] = corr_sub[i:]
+
+        count += binned.columns.max()-i
