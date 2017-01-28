@@ -28,8 +28,8 @@ if spikesort == 'jrclust':
 elif spikesort == 'kilosort':
     sp = functions.kilosort_info(data_folder)
 
-if not os.path.exists(data_folder + '_images'):
-    os.makedirs(data_folder + '_images')
+if not os.path.exists(data_folder + '/_images'):
+    os.makedirs(data_folder + '/_images')
 
 # get waveform and index of max channel (for each cluster)
 waveform, min_index = waveform.waveform_analysis(data_folder)

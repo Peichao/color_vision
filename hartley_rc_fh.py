@@ -30,7 +30,7 @@ if not os.path.exists(data_folder + '/stim_samples.npy'):
 else:
     trials['stim_sample'] = np.load(data_folder + '/stim_samples.npy')
 
+xcorr, xcorr_shuff = functions.xcorr_sp(data_folder, sp, maxlags=40, shift=4)
+
 p = functions.PlotRF(trials, sp.time[sp.cluster == 24].as_matrix(), image_array)
 p.show()
-
-

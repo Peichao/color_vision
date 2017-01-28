@@ -408,34 +408,69 @@ def xcorr_spiketime_all(sp, maxlag=50, spacing=1):
     return xcorr_dict, index_dict
 
 
-def xcorr_sp(sp, maxlags=50, shift=1):
-    # TODO add ability to compute correlation probability based on shuffled correlogram
+def xcorr_sp(data_folder, sp, maxlags=50, shift=1, cp_sig=0.1):
     """
     Computes cross-correlation using spike bins, computes all possible combinations between many pairs of neurons.
     :param sp: pandas.DataFrame of all spike times
-    :param maxlag: maximum time shift to compute
+    :param maxlags: maximum time shift to compute
     :param spacing: spacing between time shifts
     :return:
         dictionary of correlation, dictionary of indexes
     """
     sp['time_ms'] = sp.time * 1000
     binned = pd.DataFrame()
-    bins = np.arange(0, int(np.ceil(sp.time_ms.max())))
+    bins = np.arange(0, int(np.ceil(sp.time_ms.max())), shift)
     for i in np.sort(sp[sp.cluster > 0].cluster.unique()):
         binned[i] = np.histogram(sp[sp.cluster == i].time_ms, bins)[0]
+
+    binned_shuff = binned.reindex(np.random.permutation(binned.index))
+    binned_shuff = binned_shuff.reindex()
+    binned_shuff.index = binned.index
 
     index = np.arange(-maxlags, maxlags+1, shift)
     from itertools import combinations
     xcorr = pd.DataFrame(0, index=index, columns=list(combinations(binned.columns, 2)))
+    xcorr_shuff = pd.DataFrame(0, index=index, columns=list(combinations(binned.columns, 2)))
 
     count = 0
     for i in binned.columns:
         nonzero_bins = binned[i].nonzero()[0]
-        for j in np.arange(maxlags+1):
-            corr_add = binned.loc[nonzero_bins + j].sum().as_matrix()
-            corr_sub = binned.loc[nonzero_bins - j].sum().as_matrix()
+        for j in np.arange(0, maxlags+1, shift):
+            corr_add = binned.loc[nonzero_bins + j/shift].sum().as_matrix()
+            corr_sub = binned.loc[nonzero_bins - j/shift].sum().as_matrix()
 
-            xcorr.loc[j, xcorr.columns[count:count+binned.columns.max()-i]] = corr_add[i:]
-            xcorr.loc[-j, xcorr.columns[count:count+binned.columns.max()-i]] = corr_sub[i:]
+            corr_add_shuff = binned_shuff.loc[nonzero_bins + j/shift].sum().as_matrix()
+            corr_sub_shuff = binned_shuff.loc[nonzero_bins - j/shift].sum().as_matrix()
+
+            xcorr.loc[j, xcorr.columns[count:count + binned.columns.max() - i]] = corr_add[i:]
+            xcorr.loc[-j, xcorr.columns[count:count + binned.columns.max() - i]] = corr_sub[i:]
+
+            xcorr_shuff.loc[j, xcorr_shuff.columns[count:count + binned.columns.max()-i]] = corr_add_shuff[i:]
+            xcorr_shuff.loc[-j, xcorr_shuff.columns[count:count + binned.columns.max()-i]] = corr_sub_shuff[i:]
 
         count += binned.columns.max()-i
+
+    corr_prob = (xcorr.loc[0] - xcorr_shuff.loc[0]) / xcorr.sum()
+    if not os.path.exists(data_folder + '/_images'):
+        os.makedirs(data_folder + '/_images')
+
+    plt.ioff()
+    for i, corr_prob_sig_idx in enumerate(corr_prob[corr_prob > cp_sig].index):
+        fig, ax = plt.subplots()
+        ax.bar(index-(shift/2), xcorr[corr_prob_sig_idx], width=shift, color='#348ABD', alpha=0.5)
+        ax.bar(index-(shift/2), xcorr_shuff[corr_prob_sig_idx], width=shift, color='#E24A33', alpha=0.5)
+
+        max_site_1 = int(sp[sp.cluster == corr_prob_sig_idx[0]].max_site.mode())
+        max_site_2 = int(sp[sp.cluster == corr_prob_sig_idx[1]].max_site.mode())
+
+        ax.set_xlim([-maxlags, maxlags])
+        ax.set_xlabel('Time (ms)')
+        ax.set_ylabel('Number of Events')
+        plt.suptitle('Cross-Correlogram for %s, CP = %.2f' % (str(corr_prob_sig_idx), corr_prob[corr_prob_sig_idx]))
+        ax.set_title('Probe Sites: %d, %d' % (max_site_1, max_site_2), fontsize=10)
+
+        plt.savefig(data_folder + '/_images/corr%d.pdf' % i, format='pdf')
+        plt.close()
+    plt.ion()
+
+    return xcorr, xcorr_shuff

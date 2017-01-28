@@ -61,5 +61,3 @@ def waveform_analysis(data_folder):
     plt.close()
 
     return waveform, min_index
-
-
