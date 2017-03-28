@@ -9,12 +9,17 @@ plt.style.use('ggplot')
 plt.ioff()
 
 
-def waveform_analysis(data_folder):
+def waveforms(data_folder):
     waveform_path = glob.glob(data_folder + '*spkwav.mat')[0]
     waveform_h5 = tables.openFile(waveform_path)
     waveform = waveform_h5.root.trSpkWav[:]
     waveform_h5.close()
 
+    return waveform
+
+
+def waveform_analysis(data_folder):
+    waveform = waveforms(data_folder)
     min_index = np.argmin(np.min(waveform, axis=2), axis=1)
     peak_waveforms = waveform[np.arange(waveform.shape[0]), min_index, :]  # all clusters max deflection
 
@@ -36,7 +41,7 @@ def waveform_analysis(data_folder):
 
     half_max_width = np.zeros(waveform.shape[0])
     peak_trough_width = np.zeros(waveform.shape[0])
-    x = np.arange(39)
+    x = np.arange(waveform.shape[2])
     fig, (ax1, ax2) = plt.subplots(2, 1)
     for i in np.arange(waveform.shape[0]):
         px, py = shifted(shift[i], x, peak_waveforms[i, :])
