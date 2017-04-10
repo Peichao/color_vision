@@ -19,7 +19,7 @@ matplotlib.rcParams['pdf.fonttype'] = 42
 plt.style.use('ggplot')
 plt.ioff()
 
-data_folder = 'F:/NHP/AD8/Ephys/20161205/orisf_gray/'
+data_folder = 'F:/NHP/AD8/Ephys/20161207/orisf_gray_left/'
 analyzer_path = glob.glob(data_folder + '*.analyzer')[0]
 
 data_path = glob.glob(data_folder + '*.bin')[0]
@@ -36,7 +36,7 @@ if not os.path.exists(data_folder + '/_images'):
     os.makedirs(data_folder + '/_images')
 
 # get waveform and index of max channel (for each cluster)
-waveform, min_index = waveform.waveform_analysis(data_folder)
+# waveform, min_index = waveform.waveform_analysis(data_folder)
 
 analyzer_name = os.path.splitext(os.path.basename(analyzer_path))[0]
 print("Getting timing information: " + analyzer_name)
@@ -44,8 +44,8 @@ trial_num, stim_time = functions.analyzer_pg(analyzer_path)
 trial_num = pd.DataFrame(trial_num, columns=['orientation', 's_frequency'])
 
 if not os.path.exists(data_folder + 'stim_samples.npy'):
-    trial_num['stim_start'] = functions.get_stim_samples_pg(data_path, 0)[1::3] / 25000
-    # trial_num['stim_start'] = functions.get_stim_samples_pg(data_path, 0) / 25000
+    # trial_num['stim_start'] = functions.get_stim_samples_pg(data_path, 0)[1::3] / 25000
+    trial_num['stim_start'] = functions.get_stim_samples_pg(data_path, 0) / 25000
 else:
     trial_num['stim_start'] = np.load(data_folder + 'stim_samples.npy')[1::3] / 25000
 

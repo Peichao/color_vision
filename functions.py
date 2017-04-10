@@ -1,4 +1,5 @@
 import os
+import re
 import glob
 import numpy as np
 from numpy.lib.stride_tricks import as_strided
@@ -8,6 +9,8 @@ import scipy.io as sio
 import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
+import multiprocessing
+from functools import partial
 from matplotlib.widgets import Slider
 from matplotlib.image import AxesImage
 from matplotlib.backends.backend_pdf import PdfPages
@@ -41,15 +44,19 @@ def get_params(file_path, analyzer_path):
 
     # Create list of all trials from mat file.
     r_seed = []
+    r_seed_int = []
     for key in exp_params_all:
         if key.startswith('randlog'):
             r_seed.append(key)
+            r_seed_int.append(int(re.match('.*?([0-9]+)$', key).group(1)))
+
+    r_seed_idx = np.argsort(r_seed_int)
 
     # Pull all trial information into DataFrame. Includes all Hartley information and stimulus size
     all_trials = pd.DataFrame()
-    for seed in sorted(r_seed):
-        exp_params = exp_params_all[seed]
-        columns = ['quadrant', 'kx', 'ky', 'bwdom', 'color']
+    for seed_idx in r_seed_idx:
+        exp_params = exp_params_all[r_seed[seed_idx]]
+        columns = ['quadrant', 'kx', 'ky', 'bw', 'color']
         conds = pd.DataFrame(exp_params.domains.Cond, columns=columns)
         trials = pd.DataFrame(exp_params.seqs.frameseq, columns=['cond'])
         trials -= 1
@@ -109,6 +116,118 @@ def build_image_array(image_path):
     return image_array
 
 
+def build_hartley(analyzer_path):
+    analyzer_complete = sio.loadmat(analyzer_path, squeeze_me=True, struct_as_record=False)
+    analyzer = analyzer_complete['Analyzer']
+
+    x_size = analyzer.P.param[5][2]
+    y_size = analyzer.P.param[6][2]
+    min_sf = analyzer.P.param[17][2]
+    max_sf = analyzer.P.param[18][2]
+
+    screen_xcm = analyzer.M.screenXcm
+    screen_ycm = analyzer.M.screenYcm
+
+    x_pixels = analyzer.M.xpixels
+    y_pixels = analyzer.M.ypixels
+
+    screen_dist = analyzer.M.screenDist
+
+    pix_per_xcm = x_pixels / screen_xcm
+    pix_per_ycm = y_pixels / screen_ycm
+
+    x_cm = 2 * screen_dist * np.tan(x_size / 2 * np.pi / 180) + 0.1
+    xN = int(np.round(x_cm * pix_per_xcm))
+
+    y_cm = 2 * screen_dist * np.tan(y_size / 2 * np.pi / 180) + 0.1
+    yN = int(np.round(y_cm * pix_per_ycm))
+
+    xdom = np.linspace(-x_size / 2, x_size / 2, xN)
+    ydom = np.linspace(-y_size / 2, y_size / 2, yN)
+    xdom, ydom = np.meshgrid(xdom, ydom)
+    r = np.sqrt(np.square(xdom) + np.square(ydom))
+
+    oridom = np.array([0, 90, 180, 270])
+    bwdom = np.array([-1, 1])
+
+    xN = xN - np.fmod(xN, 2)
+    yN = yN - np.fmod(yN, 2)
+
+    nx = np.arange(xN)
+    ny = np.arange(yN)
+
+    dk = 1
+    kx = np.arange(-xN / 2, (xN / 2) + 0.0001, 1)
+    ky = np.arange(-yN / 2, (yN / 2) + 0.0001, 1)
+
+    kx = kx[kx >= 0]
+    ky = ky[ky >= 0]
+
+    kxmat, kymat = np.meshgrid(kx, ky)
+    nxmat, nymat = np.meshgrid(nx, ny)
+
+    sfxdom = kxmat / x_size
+    sfydom = kymat / y_size
+
+    rsf = np.sqrt(np.square(sfxdom) + np.square(sfydom))
+    kmatID = np.where((rsf <= max_sf) & (rsf >= min_sf))
+    kxdom = np.zeros(np.shape(kmatID)[1])
+    kydom = np.zeros(np.shape(kmatID)[1])
+
+    for i, kID in enumerate(kmatID[0]):
+        kxdom[i] = kxmat[kmatID[1][i], kmatID[0][i]]
+        kydom[i] = kymat[kmatID[1][i], kmatID[0][i]]
+
+    N_bw = np.size(bwdom)
+    N_ori = np.size(oridom)
+    N_kdom = np.size(kxdom)
+    N_color = 1
+    N_kxaxis = kxdom[kxdom == 0].size
+    n_blanks = 4 * N_kxaxis * N_color
+
+    N_comb = np.round(N_bw * N_ori * N_kdom * N_color)
+    N_cond = N_comb + n_blanks
+
+    cond_columns = ['ori', 'kx', 'ky', 'bw']
+    cond = pd.DataFrame(columns=cond_columns)
+    images = np.zeros([xN, yN, N_cond])
+    condnum = 0
+
+    for ori in oridom:
+        if ori == 0:
+            coord = np.array([1, 1])
+        elif ori == 90:
+            coord = np.array([-1, 1])
+        elif ori == 180:
+            coord = np.array([-1, -1])
+        else:
+            coord = np.array([1, -1])
+
+        for i, kx in enumerate(kxdom):
+            if (ori == 90) & (kydom[i] == 0):
+                continue
+
+            if (ori == 180) & (kx == 0):
+                continue
+
+            if (ori == 270) & (kx == 0 or kydom[i] == 0):
+                continue
+
+            k_x = kx * coord[0]
+            k_y = kydom[i] * coord[1]
+
+            for bw in bwdom:
+                cond.loc[condnum] = [ori, k_x, k_y, bw]
+                alpha = (2 * np.pi * k_x * nxmat / xN) + (2 * np.pi * k_y * nymat / yN)
+                images[:, :, condnum] = (np.sin(alpha) + np.cos(alpha)) * bw
+                condnum += 1
+
+    blanks = pd.DataFrame(np.zeros([n_blanks, 4]), columns=cond_columns)
+    cond_blanks = cond.append(blanks, ignore_index=True)
+
+    return cond_blanks, images
+
+
 def get_unique_trials(params_path):
     """
     Return DataFrame of unique trials from all trials. Can be used to check if certain trial numbers are missing.
@@ -130,10 +249,13 @@ def get_image_info(trials, spike_times):
     :return: pandas.Series. Image index (out of all stimuli possible) at each spike time from spike_times.
     """
     stim_idx = trials.stim_time.searchsorted(spike_times, side='right') - 1
-    image_kx = trials.kx[stim_idx].as_matrix()
-    image_ky = trials.ky[stim_idx].as_matrix()
+    trials_stim = trials.loc[stim_idx]
+    trials_stim = trials_stim[trials_stim.bw != 0]
+    cond = trials_stim.cond.as_matrix()
+    image_kx = trials_stim.kx.as_matrix()
+    image_ky = trials_stim.ky.as_matrix()
 
-    return image_kx, image_ky
+    return cond, image_kx, image_ky
 
 
 def hart_transform(kx, ky, xN, yN):
@@ -144,34 +266,6 @@ def hart_transform(kx, ky, xN, yN):
     alpha = (2 * np.pi * kx * nxmat / xN) + (2 * np.pi * ky * nymat / yN)
     hart_image = np.sin(alpha) + np.cos(alpha)
     return hart_image
-
-
-def get_mean_image(trials, spike_times, image_array):
-    """
-    Get mean image at specified spike times.
-    :param trials: pandas.DataFrame. All stimulus information including stimulus presented.
-    :param spike_times: np.ndarray. All spike times.
-    :param image_array: np.ndarray. Raw images for all possible stimuli.
-    :return: np.ndarray. Mean image.
-    """
-    # image_kx, image_ky = get_image_info(trials, spike_times)
-    # mean_image = np.mean(image_array[:, :, :, image_idx], axis=3)
-    # return mean_image
-
-
-def get_mean_point(x, y, trials, spike_times):
-    """
-    Get mean point (x, y) of all images at specified spike times.
-    :param x: Integer. X coordinate.
-    :param y: Integer. Y coordinate.
-    :param trials: pandas.DataFrame. All stimulus information including stimulus presented.
-    :param spike_times: np.ndarray. All spike times.
-    :param image_array: np.ndarray. Raw images for all possible stimuli.
-    :return: Float. Mean point.
-    """
-    # kx, ky = get_image_info(trials, spike_times)
-    # mean_point = np.mean(image_array[y, x, :, image_idx], axis=0)
-    # return mean_point
 
 
 def get_stim_samples_fh(data_path, start_time, end_time=None):
@@ -187,10 +281,10 @@ def get_stim_samples_fh(data_path, start_time, end_time=None):
         data = pd.DataFrame(data[128, start_time * 25000:], columns=['photodiode'])
 
     hi_cut = 1500
-    lo_cut = 600
+    lo_cut = 750
 
     from detect_peaks import detect_peaks
-    peaks = detect_peaks(data.photodiode, mph=lo_cut, mpd=200)
+    peaks = detect_peaks(data.photodiode.as_matrix(), mph=lo_cut, mpd=200)
 
     # import peakutils as peakutils
     # peaks = peakutils.indexes(data.photodiode, thres=(1100/data.photodiode.max()), min_dist=200)
@@ -309,7 +403,7 @@ class PlotRF(object):
     """
     Use reverse correlation to plot average stimulus preceding spikes from each unit.
     """
-    def __init__(self, trials=None, spike_times=None, analyzer_path=None):
+    def __init__(self, trials=None, spike_times=None, analyzer_path=None, cluster=None):
         """
 
         :param trials: pandas.DataFrame. Contains stimulus times and Hartley stimulus information.
@@ -317,16 +411,26 @@ class PlotRF(object):
         :param image_array: np.ndarray. Contains all image data (height x width x 3 x nStimuli).
         """
         self.analyzer_path = analyzer_path
+        self.data_folder = os.path.dirname(self.analyzer_path) + '/'
         self.xN, self.yN = stim_size_pixels(self.analyzer_path)
+        if not os.path.exists(self.data_folder + 'revcorr_image_array.npy'):
+            self.cond, self.image_array = build_hartley(self.analyzer_path)
+            self.image_array = self.image_array[:, :, 0:self.cond.shape[0]]
+            self.cond.to_pickle(self.data_folder + 'revcorr_image_cond.p')
+            np.save(self.data_folder + 'revcorr_image_array.npy', self.image_array)
+        else:
+            self.cond = pd.read_pickle(self.data_folder + 'revcorr_image_cond.p')
+            self.image_array = np.load(self.data_folder + 'revcorr_image_array.npy')
 
         self.x = None
         self.y = None
+        self.cluster = cluster
 
         self.fig, self.ax = plt.subplots()
         self.ax.set_title('Receptive Field')
         self.fig2, self.ax2 = plt.subplots()
 
-        self.slider_ax = self.fig.add_axes([0.2, 0.02, 0.6, 0.03], axisbg='yellow')
+        self.slider_ax = self.fig.add_axes([0.2, 0.02, 0.6, 0.03], facecolor='yellow')
         self.slider = Slider(self.slider_ax, 'Value', 0, 0.20, valinit=0)
         self.slider.on_changed(self.update)
         self.slider.drawon = False
@@ -338,19 +442,29 @@ class PlotRF(object):
         for i in np.where(np.diff(trials.stim_time) > 0.3)[0]:
             beginning = trials.loc[i, 'stim_time']
             end = trials.loc[i+1, 'stim_time'] + 0.2
-            spike_times = spike_times[(spike_times < beginning) |
-                                      (spike_times > end)]
+            self.spike_times = self.spike_times[(self.spike_times < beginning) |
+                                                (self.spike_times > end)]
 
-        self.image_kx, self.image_ky = get_image_info(self.trials, self.spike_times)
+        self.tau_range = np.arange(-0.2, 0, 0.001)
 
-        self.starting_image = np.zeros([self.xN.astype(int), self.yN.astype(int)])
-        for i in np.arange(self.image_kx.size):
-            hart_image = hart_transform(self.image_kx[i], self.image_ky[i], self.xN, self.yN)
-            self.starting_image += hart_image
+        if not os.path.exists(self.data_folder + 'revcorr_images_%d.npy' % cluster):
+            self.revcorr_images = np.zeros([self.xN.astype(int), self.yN.astype(int), self.tau_range.size])
+            self.revcorr()
+            np.save(self.data_folder + 'revcorr_images_%d.npy' % cluster, self.revcorr_images)
+        else:
+            self.revcorr_images = np.load(self.data_folder + 'revcorr_images_%d.npy' % cluster)
 
-        self.starting_image /= self.image_kx.size
-
-        self.l = self.ax.imshow(self.starting_image[self.xN/4:self.xN*3/4, self.yN/4:self.yN*3/4], cmap='jet', vmin=-1.414, vmax=1.414, picker=True)
+        self.revcorr_center = self.revcorr_images[np.round(self.xN/4).astype(int):np.round(self.xN*3/4).astype(int),
+                                                  np.round(self.yN/4).astype(int):np.round(self.yN*3/4).astype(int),
+                                                  :]
+        self.revcorr_center_min = self.revcorr_center.min()
+        self.revcorr_center_max = self.revcorr_center.max()
+        self.revcorr_center_norm = (self.revcorr_center - self.revcorr_center_min) / \
+                                   (self.revcorr_center_max - self.revcorr_center_min)
+        self.l = self.ax.imshow(self.revcorr_center[:, :, -1], cmap='jet', picker=True, interpolation='bilinear',
+                                vmin=self.revcorr_center.min(), vmax=self.revcorr_center.max())
+        self.ax.xaxis.set_visible(False)
+        self.ax.yaxis.set_visible(False)
 
         self.t = np.arange(-0.2, 0, 0.001)
         self.ydata = np.zeros(np.size(self.t))
@@ -359,23 +473,29 @@ class PlotRF(object):
 
         self.fig.canvas.mpl_connect('pick_event', self.onpick)
 
+    def revcorr(self):
+        for i, tau in enumerate(self.tau_range):
+            print('Analyzing time lag of %.3f seconds.' % tau)
+            spike_times_new = self.spike_times + tau
+            cond, image_kx, image_ky = get_image_info(self.trials, spike_times_new)
+            # for j in np.arange(image_kx.size):
+            #     hart_image = hart_transform(image_kx[j], image_ky[j], self.xN, self.yN)
+            #     self.revcorr_images[:, :, i] += hart_image
+            # self.revcorr_images[:, :, i] /= image_kx.size
+            # self.revcorr_images[:, :, i] = np.mean(self.image_array[:, :, cond], axis=2)
+            idx_weights = np.histogram(cond, bins=np.arange(0, self.cond.shape[0] + 1))
+            self.revcorr_images[:, :, i] = np.average(self.image_array, axis=2, weights=idx_weights[0])
+
     def update(self, value):
         """
 
         :param value: Float. Value from slider on image.
         :return: New image presented containing shifted time window.
         """
-        spike_times_new = self.spike_times - value
-        image_kx_new, image_ky_new = get_image_info(self.trials, spike_times_new)
-
-        new_image = np.zeros([self.xN.astype(int), self.yN.astype(int)])
-
-        for i in np.arange(image_kx_new.size):
-            hart_image = hart_transform(image_kx_new[i], image_ky_new[i], self.xN, self.yN)
-            new_image += hart_image
-        new_image /= image_kx_new.size
-
-        self.l.set_data(new_image[self.xN/4:self.xN*3/4, self.yN/4:self.yN*3/4])
+        # self.l.set_data(self.revcorr_images[np.round(self.xN/4).astype(int):np.round(self.xN*3/4).astype(int),
+        #                                     np.round(self.yN/4).astype(int):np.round(self.yN*3/4).astype(int),
+        #                                     np.searchsorted(self.tau_range, -value)])
+        self.l.set_data(self.revcorr_center[:, :, np.searchsorted(self.tau_range, -value)])
         self.slider.valtext.set_text('{:03.3f}'.format(value))
         self.fig.canvas.draw()
 
@@ -391,24 +511,14 @@ class PlotRF(object):
             self.x = int(np.round(mouse_event.xdata))
             self.y = int(np.round(mouse_event.ydata))
 
-            for i, time in enumerate(self.t):
-                spike_times_new_pick = (np.array(self.spike_times) + time).tolist()
-                image_kx_new_pick, image_ky_new_pick = get_image_info(self.trials, spike_times_new_pick)
-                mean_point = 0
-
-                for j in np.arange(image_kx_new_pick.size):
-                    hart_image = hart_transform(image_kx_new_pick[j], image_ky_new_pick[j], self.xN, self.yN)
-                    mean_point += hart_image[self.x, self.y]
-                mean_point /= image_kx_new_pick.size
-
-                # y_val = get_mean_point(self.x, self.y, self.trials, spike_times_new_pick)
-                self.ydata[i] = mean_point
+            self.ydata = self.revcorr_center[self.y, self.x, :]
             self.l2.set_data(self.t, self.ydata)
-            self.ax2.set_title('Spike-Triggered Average for Point [%d, %d]' % (self.x, self.y))
+            self.ax2.set_title('Spike-Triggered Average for Point [%d, %d]' % (self.y, self.x))
             self.ax2.set_xlabel('Time Before Spike (seconds)')
             self.ax2.set_ylabel('Spike-Triggered Average')
-            self.ax2.relim()
-            self.ax2.autoscale_view(True, True, True)
+            self.ax2.set_ylim([self.revcorr_center.min(), self.revcorr_center.max()])
+            # self.ax2.relim()
+            # self.ax2.autoscale_view(True, True, True)
             self.fig2.canvas.draw()
 
     def show(self):
@@ -417,6 +527,46 @@ class PlotRF(object):
         :return: Image displayed.
         """
         plt.show()
+
+
+class RevcorrObject(object):
+    def __init__(self, params):
+        self.i, self.tau, self.spike_times, self.trials, self.revcorr_images, self.image_array, self.conditions = params
+
+
+def revcorr_ind(obj):
+    spike_times_new = obj.spike_times + obj.tau
+    cond, image_kx, image_ky = get_image_info(obj.trials, spike_times_new)
+    idx_weights = np.histogram(cond, bins=np.arange(0, obj.conditions.shape[0] + 1))
+    # obj.progdialog.setLabelText('Analyzing time lag of %.3f seconds.' % -obj.tau)
+    # obj.progdialog.setValue(obj.i + 1)
+    # print('Analyzing time lag of %.3f seconds.' % -obj.tau)
+    return np.average(obj.image_array, axis=2, weights=idx_weights[0])
+
+
+def revcorr(tau_range, spike_times, trials, revcorr_images, image_array, conditions):
+    object_list = []
+    for i, tau in enumerate(tau_range):
+        object_list.append(RevcorrObject((i, tau,
+                                          spike_times, trials, revcorr_images, image_array, conditions)))
+    pool = multiprocessing.Pool()
+    results = pool.map(revcorr_ind, object_list)
+    pool.close()
+    pool.join()
+
+    return results
+
+
+# def revcorr(tau_range, spike_times, trials, revcorr_images, image_array, conditions, progdialog):
+#     for i, tau in enumerate(tau_range):
+#         spike_times_new = spike_times + tau
+#         cond, image_kx, image_ky = get_image_info(trials, spike_times_new)
+#         idx_weights = np.histogram(cond, bins=np.arange(0, conditions.shape[0] + 1))
+#         revcorr_images[:, :, i] = np.average(image_array, axis=2, weights=idx_weights[0])
+#         progdialog.setLabelText('Analyzing time lag of %.3f seconds.' % -tau)
+#         progdialog.setValue(i+1)
+#
+#     return revcorr_images
 
 
 class GetLayers(object):
@@ -1070,3 +1220,8 @@ def orisf_plot(data_folder, sp, cluster, trial_num, stim_time, make_plot=False):
         plt.close()
 
     return trial_num
+
+
+def plot_lim(min, max):
+    lim = np.max(np.abs(np.array([min, max])))
+    return lim
