@@ -1,6 +1,7 @@
 import glob
 import sys
 import os
+import shutil
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -10,8 +11,9 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 import matplotlib.ticker as mtick
 import functions
+import boto3
 
-matplotlib.use('Qt5Agg')
+# matplotlib.use('Qt5Agg')
 progname = os.path.basename(sys.argv[0])
 progversion = "0.1"
 
@@ -218,6 +220,24 @@ class LatencyWindow(AppWindowParent):
 class ApplicationWindow(AppWindowParent):
     def __init__(self):
         AppWindowParent.__init__(self)
+
+        if os.name == 'posix':
+            self.temp_dir = '/Users/anupam/Documents/temp'
+        else:
+            self.temp_dir = 'F:/temp'
+
+        self.s3 = boto3.resource('s3')
+        self.s3_client = boto3.client('s3')
+        snlc = self.s3.Bucket('snlc')
+        self.object_list = []
+        animal_list_all = []
+        for obj in snlc.objects.page_size(100):
+            if '.' not in obj.key:
+                continue
+            self.object_list.append(obj.key)
+            animal_list_all.append(obj.key.split('/')[1])
+        self.animal_list = list(set(animal_list_all))
+
         self.setWindowTitle("Hartley Receptive Field")
 
         self.param_path = None
@@ -279,18 +299,67 @@ class ApplicationWindow(AppWindowParent):
         self.latency_window = LatencyWindow(self)
 
     def load_clicked(self):
-        self.param_path = QtWidgets.QFileDialog.getOpenFileName(self, 'Open File', '', '*.mat')
-        if self.param_path[0] == "":
-            return
-        self.statusBar().showMessage('Loaded %s' % self.param_path[0])
-        self.trial_info = RecordingInfo(self.param_path[0])
-        data_folder = os.path.dirname(self.param_path[0])
-        self.exp_details.clear()
-        self.exp_details.append("<html><b>Recording Details</b></html>")
-        self.exp_details.append('Date: \t%s' % os.path.dirname(data_folder)[-8:])
-        self.exp_details.append('Recording: \t%s' % os.path.split(data_folder)[1])
-        self.exp_details.append('Clusters: \t%d' %
-                                np.unique(self.trial_info.sp.cluster[self.trial_info.sp.cluster > 0]).size)
+        if os.name == 'nt':
+            self.param_path = QtWidgets.QFileDialog.getOpenFileName(self, 'Open File', '', '*.mat')
+            if self.param_path[0] == "":
+                return
+            self.statusBar().showMessage('Loaded %s' % self.param_path[0])
+            self.trial_info = RecordingInfo(self.param_path[0])
+            data_folder = os.path.dirname(self.param_path[0])
+            self.exp_details.clear()
+            self.exp_details.append("<html><b>Recording Details</b></html>")
+            self.exp_details.append('Date: \t%s' % os.path.dirname(data_folder)[-8:])
+            self.exp_details.append('Recording: \t%s' % os.path.split(data_folder)[1])
+            self.exp_details.append('Clusters: \t%d' %
+                                    np.unique(self.trial_info.sp.cluster[self.trial_info.sp.cluster > 0]).size)
+        else:
+            # ability to select animal from list here
+            animal, ok = QtWidgets.QInputDialog.getItem(self, 'Select Animal', 'List of Animals:',
+                                                        self.animal_list, 0, False)
+            for the_file in os.listdir(self.temp_dir):
+                file_path = os.path.join(self.temp_dir, the_file)
+                try:
+                    if os.path.isfile(file_path):
+                        os.unlink(file_path)
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                except Exception as e:
+                    print(e)
+
+            if ok and animal:
+                animal = 'AD7'
+                object_list_animal = functions.get_objects_str(self.object_list, animal)
+                date_list_animal = functions.get_between_slashes(object_list_animal, 2)
+                date_list_animal = [s for s in date_list_animal if s.isdigit()]
+            else:
+                return
+
+            # ability to select date from list
+            date, ok = QtWidgets.QInputDialog.getItem(self, 'Select Date', 'List of Dates:',
+                                                      date_list_animal, 0, False)
+            if ok and date:
+                object_list_animal_date = functions.get_objects_str(object_list_animal, date)
+                exp_list_animal_date = functions.get_between_slashes(object_list_animal_date, 3)
+            else:
+                return
+
+            # put ability to select exp from list
+            exp, ok = QtWidgets.QInputDialog.getItem(self, 'Select Experiment', 'List of Experiments:',
+                                                     exp_list_animal_date, 0, False)
+            if ok and date:
+                file_list = functions.get_objects_str(object_list_animal_date, exp)
+            else:
+                return
+
+            # download necessary files
+            for file in file_list:
+                if file.endswith('.mat') or file.endswith('.p') or file.endswith('image_array.npy') or\
+                        file.endswith('stim_sampmles.npy') or file.endswith('.csv'):
+                    if not file.endswith('jrc.mat'):
+                        # put ability to only download npy files, but not the image arrays
+                        self.s3_client.download_file('snlc', file, self.temp_dir + '/' + file.split('/')[4])
+            self.param_path = glob.glob(self.temp_dir + '/*.analyzer')[0]
+
         self.process_button.setEnabled(True)
         self.process_button.clicked.connect(self.process_clicked)
 

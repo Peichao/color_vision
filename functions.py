@@ -29,6 +29,14 @@ ref_sites = probe_geo[ref_sites_idx, :]
 probe_geo = np.delete(probe_geo, ref_sites_idx, axis=0)
 
 
+def get_objects_str(object_list, key):
+    return [obj for obj in object_list if key in obj]
+
+
+def get_between_slashes(object_list, key):
+    return list(set([obj.split('/')[key] for obj in object_list]))
+
+
 def get_params(file_path, analyzer_path):
     """
     Input path to mat file from stimulus computer that contains trial sequence info.
@@ -555,18 +563,6 @@ def revcorr(tau_range, spike_times, trials, revcorr_images, image_array, conditi
     pool.join()
 
     return results
-
-
-# def revcorr(tau_range, spike_times, trials, revcorr_images, image_array, conditions, progdialog):
-#     for i, tau in enumerate(tau_range):
-#         spike_times_new = spike_times + tau
-#         cond, image_kx, image_ky = get_image_info(trials, spike_times_new)
-#         idx_weights = np.histogram(cond, bins=np.arange(0, conditions.shape[0] + 1))
-#         revcorr_images[:, :, i] = np.average(image_array, axis=2, weights=idx_weights[0])
-#         progdialog.setLabelText('Analyzing time lag of %.3f seconds.' % -tau)
-#         progdialog.setValue(i+1)
-#
-#     return revcorr_images
 
 
 class GetLayers(object):
