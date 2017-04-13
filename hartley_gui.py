@@ -309,7 +309,7 @@ class ApplicationWindow(AppWindowParent):
                                 np.unique(self.trial_info.sp.cluster[self.trial_info.sp.cluster > 0]).size)
         self.exp_details.append('X size: \t%.2f' % x_size / 2)
         self.exp_details.append('Y size: \t%.2f' % y_size / 2)
-        self.exp_details.append('Distance: \t%d cm'% screen_dist)
+        self.exp_details.append('Distance: \t%d cm' % screen_dist)
 
         self.process_button.setEnabled(True)
         self.process_button.clicked.connect(self.process_clicked)
