@@ -6,6 +6,7 @@ import pandas as pd
 import matplotlib
 from PyQt5 import QtCore, QtWidgets
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 import matplotlib.ticker as mtick
@@ -83,7 +84,7 @@ class RFMplCanvas(MplCanvas):
         xN, yN = functions.stim_size_pixels(analyzer_path)
         if not os.path.exists(data_folder + 'revcorr_image_array.npy'):
             cond, image_array = functions.build_hartley(analyzer_path)
-            image_array = self.image_array[:, :, 0:cond.shape[0]]
+            image_array = image_array[:, :, 0:cond.shape[0]]
             cond.to_pickle(data_folder + 'revcorr_image_cond.p')
             np.save(data_folder + 'revcorr_image_array.npy', image_array)
         else:
@@ -234,8 +235,11 @@ class ApplicationWindow(AppWindowParent):
 
         self.receptive_field = RFMplCanvas(self.main_widget, width=5, height=5, dpi=100)
         self.rf_point = PointMplCanvas(self.main_widget, width=5, height=5, dpi=100)
-        self.l.addWidget(self.receptive_field, 1, 0, 1, 6)
-        self.l.addWidget(self.rf_point, 2, 0, 1, 6)
+        self.navi_toolbar1 = NavigationToolbar(self.receptive_field, self)
+        self.l.addWidget(self.navi_toolbar1, 1, 0, 1, 6)
+
+        self.l.addWidget(self.receptive_field, 2, 0, 1, 6)
+        self.l.addWidget(self.rf_point, 3, 0, 1, 6)
 
         load_button = QtWidgets.QPushButton('Load File')
         self.l.addWidget(load_button, 0, 0, 1, 3)
@@ -247,31 +251,33 @@ class ApplicationWindow(AppWindowParent):
 
         cluster_label = QtWidgets.QLabel()
         cluster_label.setText('Cluster:')
-        self.l.addWidget(cluster_label, 3, 0, 1, 1)
+        self.l.addWidget(cluster_label, 4, 0, 1, 1)
 
         self.cluster_edit = QtWidgets.QLineEdit()
-        self.l.addWidget(self.cluster_edit, 3, 1, 1, 2)
+        self.l.addWidget(self.cluster_edit, 4, 1, 1, 2)
         self.cluster_edit.returnPressed.connect(self.enter_press)
 
         self.cluster_button = QtWidgets.QPushButton('Process')
-        self.l.addWidget(self.cluster_button, 3, 3, 1, 1)
+        self.l.addWidget(self.cluster_button, 4, 3, 1, 1)
         self.cluster_button.setEnabled(False)
 
         self.last_button = QtWidgets.QPushButton('Last')
-        self.l.addWidget(self.last_button, 3, 4, 1, 1)
+        self.l.addWidget(self.last_button, 4, 4, 1, 1)
+        self.last_button.clicked.connect(self.last_press)
         self.last_button.setEnabled(False)
 
         self.next_button = QtWidgets.QPushButton('Next')
-        self.l.addWidget(self.next_button, 3, 5, 1, 1)
+        self.l.addWidget(self.next_button, 4, 5, 1, 1)
+        self.next_button.clicked.connect(self.next_press)
         self.next_button.setEnabled(False)
 
         self.exp_details = QtWidgets.QTextEdit()
         self.exp_details.setReadOnly(True)
-        self.l.addWidget(self.exp_details, 0, 6, 2, 1)
+        self.l.addWidget(self.exp_details, 1, 6, 2, 1)
 
         self.cluster_details = QtWidgets.QTextEdit()
         self.cluster_details.setReadOnly(True)
-        self.l.addWidget(self.cluster_details, 2, 6, 2, 1)
+        self.l.addWidget(self.cluster_details, 3, 6, 2, 1)
 
         self.main_widget.setFocus()
         self.setCentralWidget(self.main_widget)
@@ -328,12 +334,6 @@ class ApplicationWindow(AppWindowParent):
     def enter_press(self):
         self.cluster = int(self.cluster_edit.text())
         self.update_cluster()
-        if self.cluster != 1:
-            self.last_button.setEnabled(True)
-            self.last_button.clicked.connect(self.last_press)
-        if self.cluster != np.unique(self.trial_info.sp.cluster[self.trial_info.sp.cluster > 0]).size:
-            self.next_button.setEnabled(True)
-            self.next_button.clicked.connect(self.next_press)
 
     def last_press(self):
         self.cluster -= 1
@@ -356,6 +356,12 @@ class ApplicationWindow(AppWindowParent):
         self.cluster_details.append('Spikes: \t%d' %
                                     self.trial_info.sp[self.trial_info.sp.cluster == self.cluster].time.size)
         self.cluster_edit.clear()
+        if self.cluster != 1:
+            self.last_button.setEnabled(True)
+
+        if self.cluster != np.unique(self.trial_info.sp.cluster[self.trial_info.sp.cluster > 0]).size:
+            self.next_button.setEnabled(True)
+
 
     def file_quit(self):
         self.close()
