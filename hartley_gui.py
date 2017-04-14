@@ -293,12 +293,15 @@ class ApplicationWindow(AppWindowParent):
         self.trial_info = RecordingInfo(self.param_path[0])
         data_folder = os.path.dirname(self.param_path[0])
 
-        analyzer_path = glob.glob(data_folder + '*.analyzer')[0]
+        analyzer_path = glob.glob(data_folder + '/*.analyzer')[0]
+        import scipy.io as sio
         analyzer_complete = sio.loadmat(analyzer_path, squeeze_me=True, struct_as_record=False)
         analyzer = analyzer_complete['Analyzer']
 
-        x_size = analyzer.P.param[5][2]
-        y_size = analyzer.P.param[6][2]
+        x_size = float(analyzer.P.param[5][2])
+        y_size = float(analyzer.P.param[6][2])
+        min_sf = float(analyzer.P.param[17][2])
+        max_sf = float(analyzer.P.param[18][2])
         screen_dist = int(analyzer.M.screenDist)
 
         self.exp_details.clear()
@@ -307,9 +310,11 @@ class ApplicationWindow(AppWindowParent):
         self.exp_details.append('Recording: \t%s' % os.path.split(data_folder)[1])
         self.exp_details.append('Clusters: \t%d' %
                                 np.unique(self.trial_info.sp.cluster[self.trial_info.sp.cluster > 0]).size)
-        self.exp_details.append('X size: \t%.2f' % x_size / 2)
-        self.exp_details.append('Y size: \t%.2f' % y_size / 2)
+        self.exp_details.append('X size: \t%.2f degrees' % (x_size / 2))
+        self.exp_details.append('Y size: \t%.2f degrees' % (y_size / 2))
         self.exp_details.append('Distance: \t%d cm' % screen_dist)
+        self.exp_details.append('Min. SF: \t%.1f cpd' % min_sf)
+        self.exp_details.append('Max. SF: \t%.1f cpd' % max_sf)
 
         self.process_button.setEnabled(True)
         self.process_button.clicked.connect(self.process_clicked)
@@ -373,7 +378,6 @@ class ApplicationWindow(AppWindowParent):
 
         if self.cluster != np.unique(self.trial_info.sp.cluster[self.trial_info.sp.cluster > 0]).size:
             self.next_button.setEnabled(True)
-
 
     def file_quit(self):
         self.close()
