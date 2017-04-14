@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 import matplotlib.ticker as mtick
 import functions
-# import boto3
 
 matplotlib.use('Qt5Agg')
 progname = os.path.basename(sys.argv[0])
