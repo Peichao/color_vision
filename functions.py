@@ -72,10 +72,13 @@ def get_params(file_path, analyzer_path):
         for column in columns:
             trials[column] = trials.cond.map(conds[column])
 
-        trials['ori'] = np.degrees(np.arctan(trials.ky / trials.kx)) % 360
-        trials['sf'] = np.sqrt((trials.kx/x_size)**2 + (trials.ky/y_size)**2)
-
         all_trials = pd.concat([all_trials, trials], axis=0, ignore_index=True)
+
+    all_trials['ori'] = np.arctan((all_trials['ky']) / (all_trials['kx']))
+    all_trials['sf'] = np.sqrt((all_trials['kx'] / x_size) ** 2 + (all_trials['ky'] / y_size) ** 2)
+
+    all_trials['sf_x'] = np.round(np.nan_to_num(all_trials['sf'] * np.cos(all_trials['ori'])), 1)
+    all_trials['sf_y'] = np.round(np.nan_to_num(all_trials['sf'] * np.sin(all_trials['ori'])), 1)
 
     return all_trials
 
@@ -263,7 +266,10 @@ def get_image_info(trials, spike_times):
     image_kx = trials_stim.kx.as_matrix()
     image_ky = trials_stim.ky.as_matrix()
 
-    return cond, image_kx, image_ky
+    image_sfx = trials_stim.sf_x.as_matrix()
+    image_sfy = trials_stim.sf_y.as_matrix()
+
+    return cond, image_kx, image_ky, image_sfx, image_sfy
 
 
 def hart_transform(kx, ky, xN, yN):
@@ -288,7 +294,7 @@ def get_stim_samples_fh(data_path, start_time, end_time=None):
     else:
         data = pd.DataFrame(data[128, start_time * 25000:], columns=['photodiode'])
 
-    hi_cut = 1500
+    hi_cut = 1400
     lo_cut = 750
 
     from detect_peaks import detect_peaks
@@ -444,6 +450,12 @@ class PlotRF(object):
         self.slider.drawon = False
 
         self.trials = trials
+        self.sfx_vals = np.sort(np.unique(self.trials.sf_x))
+        self.sfy_vals = np.sort(np.unique(self.trials.sf_y))
+
+        self.sfx_vals_bins = np.append(self.sfx_vals, np.max(self.sfx_vals) + 1)
+        self.sfy_vals_bins = np.append(self.sfy_vals, np.max(self.sfy_vals) + 1)
+
         self.spike_times = spike_times[(spike_times > trials.stim_time.min() + 0.2) &
                                        (spike_times < trials.stim_time.max())]
 
@@ -455,10 +467,28 @@ class PlotRF(object):
 
         self.tau_range = np.arange(-0.2, 0, 0.001)
 
-        if not os.path.exists(self.data_folder + 'revcorr_images_%d.npy' % cluster):
+        if not (os.path.exists(self.data_folder + 'revcorr_images_%d.npy' % cluster)) & \
+                (os.path.exists(self.data_folder + 'revcorr_images_f_%d.npz' % cluster)):
             self.revcorr_images = np.zeros([self.xN.astype(int), self.yN.astype(int), self.tau_range.size])
+            self.revcorr_images_f = np.zeros([np.size(self.sfx_vals),
+                                              np.size(self.sfy_vals),
+                                              self.tau_range.size])
             self.revcorr()
             np.save(self.data_folder + 'revcorr_images_%d.npy' % cluster, self.revcorr_images)
+
+            # H, xedges, yedges = np.histogram2d(self.trials.sf_x, self.trials.sf_y,
+            #                                    bins=[self.sfx_vals_bins, self.sfy_vals_bins])
+            # H_rep = np.repeat(H.reshape(H.shape[0], H.shape[1], 1), self.tau_range.size, axis=2)
+            # np.seterr(divide='ignore', invalid='ignore')
+            # self.revcorr_images_f /= H_rep
+            # self.revcorr_images_final = get_baseline_circle(self.sfx_vals.max(), self.revcorr_images_f,self.tau_range,
+            #                                                 self.sfx_vals, self.sfy_vals)
+            # self.revcorr_images_final = np.log10(self.revcorr_images_final)
+
+            np.savez(self.data_folder + 'revcorr_images_f_%d.npz' % cluster,
+                     images_f=self.revcorr_images_f,
+                     sfx_vals=self.sfx_vals,
+                     sfy_vals=self.sfy_vals)
         else:
             self.revcorr_images = np.load(self.data_folder + 'revcorr_images_%d.npy' % cluster)
 
@@ -485,14 +515,13 @@ class PlotRF(object):
         for i, tau in enumerate(self.tau_range):
             print('Analyzing time lag of %.3f seconds.' % tau)
             spike_times_new = self.spike_times + tau
-            cond, image_kx, image_ky = get_image_info(self.trials, spike_times_new)
-            # for j in np.arange(image_kx.size):
-            #     hart_image = hart_transform(image_kx[j], image_ky[j], self.xN, self.yN)
-            #     self.revcorr_images[:, :, i] += hart_image
-            # self.revcorr_images[:, :, i] /= image_kx.size
-            # self.revcorr_images[:, :, i] = np.mean(self.image_array[:, :, cond], axis=2)
+            cond, image_kx, image_ky, image_sfx, image_sfy = get_image_info(self.trials, spike_times_new)
             idx_weights = np.histogram(cond, bins=np.arange(0, self.cond.shape[0] + 1))
             self.revcorr_images[:, :, i] = np.average(self.image_array, axis=2, weights=idx_weights[0])
+
+            image_sfx_ind = np.searchsorted(self.sfx_vals, image_sfx)
+            image_sfy_ind = np.searchsorted(self.sfy_vals, image_sfy)
+            np.add.at(self.revcorr_images_f[:, :, i], [image_sfx_ind, image_sfy_ind], 1)
 
     def update(self, value):
         """
@@ -500,9 +529,6 @@ class PlotRF(object):
         :param value: Float. Value from slider on image.
         :return: New image presented containing shifted time window.
         """
-        # self.l.set_data(self.revcorr_images[np.round(self.xN/4).astype(int):np.round(self.xN*3/4).astype(int),
-        #                                     np.round(self.yN/4).astype(int):np.round(self.yN*3/4).astype(int),
-        #                                     np.searchsorted(self.tau_range, -value)])
         self.l.set_data(self.revcorr_center[:, :, np.searchsorted(self.tau_range, -value)])
         self.slider.valtext.set_text('{:03.3f}'.format(value))
         self.fig.canvas.draw()
@@ -525,8 +551,6 @@ class PlotRF(object):
             self.ax2.set_xlabel('Time Before Spike (seconds)')
             self.ax2.set_ylabel('Spike-Triggered Average')
             self.ax2.set_ylim([self.revcorr_center.min(), self.revcorr_center.max()])
-            # self.ax2.relim()
-            # self.ax2.autoscale_view(True, True, True)
             self.fig2.canvas.draw()
 
     def show(self):
@@ -537,6 +561,23 @@ class PlotRF(object):
         plt.show()
 
 
+def get_baseline_circle(max_sf, revcorr_image_f, tau_range, sfx_vals, sfy_vals):
+    min_rad = -np.pi / 2
+    max_rad = np.pi / 2
+
+    rad_range = np.linspace(min_rad, max_rad, 50)
+    x = np.round((max_sf - 1) * np.cos(rad_range))
+    y = np.round((max_sf - 1) * np.sin(rad_range))
+
+    x_ind = np.searchsorted(sfx_vals, x)
+    y_ind = np.searchsorted(sfy_vals, y)
+
+    for i, tau in enumerate(tau_range):
+        revcorr_image_f[:, :, i] -= np.mean(revcorr_image_f[x_ind, y_ind, i])
+
+    return revcorr_image_f
+
+
 class RevcorrObject(object):
     def __init__(self, params):
         self.i, self.tau, self.spike_times, self.trials, self.revcorr_images, self.image_array, self.conditions = params
@@ -544,7 +585,7 @@ class RevcorrObject(object):
 
 def revcorr_ind(obj):
     spike_times_new = obj.spike_times + obj.tau
-    cond, image_kx, image_ky = get_image_info(obj.trials, spike_times_new)
+    cond, image_kx, image_ky, image_sfx, image_sfy = get_image_info(obj.trials, spike_times_new)
     idx_weights = np.histogram(cond, bins=np.arange(0, obj.conditions.shape[0] + 1))
     # obj.progdialog.setLabelText('Analyzing time lag of %.3f seconds.' % -obj.tau)
     # obj.progdialog.setValue(obj.i + 1)

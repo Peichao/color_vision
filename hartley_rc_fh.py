@@ -5,6 +5,7 @@ from tkinter.filedialog import askopenfilename
 import functions
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 
 tk.Tk().withdraw()
 params_paths = askopenfilename(initialdir='F:/NHP',
@@ -33,10 +34,20 @@ trials['stim_time'] = trials.stim_sample / 25000
 
 # xcorr = functions.xcorr_spiketime_all(data_folder, sp, maxlag=50, spacing=1)
 
-for clust in np.arange(1, 42):
-    print('analyzing cluster %d' % clust)
-    p = functions.PlotRF(trials, sp.time[sp.cluster == clust].as_matrix(), analyzer_path, clust)
-
-cluster = 3
-p = functions.PlotRF(trials, sp.time[sp.cluster == cluster].as_matrix(), analyzer_path, cluster)
-p.show()
+for i in range(1, 74):
+    cluster = i
+    p = functions.PlotRF(trials, sp.time[sp.cluster == cluster].as_matrix(), analyzer_path, cluster)
+    loadz = np.load(data_folder + 'revcorr_images_f_%d.npz' % cluster)
+    # plt.imshow(loadz['images_f'][:, :, 155].T,
+    #            interpolation='bicubic', cmap='jet', origin='lower',
+    #            extent=[loadz['sfx_vals'].min(), loadz['sfx_vals'].max(),
+    #            loadz['sfy_vals'].min(), loadz['sfy_vals'].max()])
+    # plt.xlabel(r'$\omega_x$')
+    # plt.ylabel(r'$\omega_y$')
+    # p.show()
+    #
+    # trials.to_csv(data_folder + 'trials.csv')
+    import scipy.io as sio
+    revcorr_images_f = loadz['images_f']
+    sio.savemat(data_folder + 'revcorr_images_f_%d.mat' % cluster, {'revcorr_images_f': revcorr_images_f})
+    sio.savemat(data_folder + 'spike_times_%d.mat' % cluster, mdict={'spike_times': sp[sp.cluster == cluster].time.as_matrix()})
