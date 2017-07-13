@@ -43,8 +43,8 @@ def csd_analysis():
     # plot normalized CSDs
     fig, (ax1, ax2) = plt.subplots(1, 2)
     plt.set_cmap('jet_r')
-    ax1.imshow(norm_csd1[:, 0:100], interpolation='bicubic', origin='lower', aspect='auto')
-    ax2.imshow(norm_csd2[:, 0:100], interpolation='bicubic', origin='lower', aspect='auto')
+    ax1.imshow(norm_csd1[:, 0:100], interpolation='bicubic', aspect='auto')
+    ax2.imshow(norm_csd2[:, 0:100], interpolation='bicubic', aspect='auto')
 
     ax1.set_xlabel('Time (ms)')
     ax2.set_xlabel('Time (ms)')
@@ -76,7 +76,7 @@ def csd_analysis():
 
     fig2, ax = plt.subplots(1)
     plt.set_cmap('jet_r')
-    ax.imshow(csd_avg[:, 0:100], interpolation='bicubic', origin='lower', aspect='auto')
+    ax.imshow(csd_avg[:, 0:100], interpolation='bicubic', aspect='auto')
 
     ax.set_xlabel('Time (ms)')
     ax.set_ylabel('Channel (odd)')
