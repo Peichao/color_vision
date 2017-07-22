@@ -19,7 +19,7 @@ matplotlib.rcParams['pdf.fonttype'] = 42
 plt.style.use('ggplot')
 plt.ioff()
 
-data_folder = 'F:/NHP/AD7/20160920/001_011_ori_sf_achromatic/'
+data_folder = 'F:/NHP/AD8/Ephys/20161205/orisf_gray/'
 analyzer_path = glob.glob(data_folder + '*.analyzer')[0]
 
 data_path = glob.glob(data_folder + '*.bin')[0]
@@ -41,13 +41,20 @@ if not os.path.exists(data_folder + '/_images'):
 analyzer_name = os.path.splitext(os.path.basename(analyzer_path))[0]
 print("Getting timing information: " + analyzer_name)
 trial_num, stim_time = functions.analyzer_pg(analyzer_path)
-trial_num = pd.DataFrame(trial_num, columns=['orientation', 's_frequency'])
+trial_num = pd.DataFrame(trial_num, columns=['ori', 's_freq'])
+
+trial_num['direction'] = trial_num.ori
+trial_num.ori[(trial_num.ori >= 180) & (trial_num.ori != 256)] = trial_num.ori[(trial_num.ori >= 180) &
+                                                                               (trial_num.ori != 256)] - 180
 
 if not os.path.exists(data_folder + 'stim_samples.npy'):
     # trial_num['stim_start'] = functions.get_stim_samples_pg(data_path, 0)[1::3] / 25000
     trial_num['stim_start'] = functions.get_stim_samples_pg(data_path, 0) / 25000
+    np.save(os.path.dirname(data_path) + '/stim_samples.npy', trial_num.stim_start * 25000)
+
 else:
     trial_num['stim_start'] = np.load(data_folder + 'stim_samples.npy')[1::3] / 25000
+    # trial_num['stim_start'] = np.load(data_folder + 'stim_samples.npy') / 25000
 
 trial_num['stim_end'] = trial_num.stim_start + stim_time[2]
 

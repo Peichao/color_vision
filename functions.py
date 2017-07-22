@@ -359,8 +359,6 @@ def get_stim_samples_pg(data_path, start_time, end_time=None):
     # peaks_correct = np.delete(peaks, dropped + 1)
     # stim_times = peaks_correct[1::19]
 
-    np.save(os.path.dirname(data_path) + '/stim_samples.npy', stim_times)
-
     return stim_times
 
 
@@ -399,6 +397,20 @@ def analyzer_pg(analyzer_path):
         stim_time[count4] = analyzer.P.param[count4][2]
 
     return trial_num, stim_time
+
+
+def analyzer_pg_conds(analyzer_path):
+    trial_num, stim_time = analyzer_pg(analyzer_path)
+
+    analyzer_complete = sio.loadmat(analyzer_path, squeeze_me=True, struct_as_record=False)
+    analyzer = analyzer_complete['Analyzer']
+
+    columns = []
+    for i in analyzer.L.param:
+        columns.append(i[0])
+
+    trial_info = pd.DataFrame(trial_num, columns=columns)
+    return trial_info, stim_time
 
 
 def jrclust_csv(csv_path):
@@ -1206,7 +1218,7 @@ def xcorr_sp_mean(data_folder, sp, maxlags=40, shift=1, cz_sig=2.5):
     return xcorr
 
 
-def orisf_plot(data_folder, sp, cluster, trial_num, stim_time, make_plot=False):
+def orisf_group(sp, cluster, trial_num, stim_time, var1, var2):
     cluster_str = 'cluster' + str(cluster)
 
     sp_cluster = sp[sp.cluster == cluster]
@@ -1218,13 +1230,24 @@ def orisf_plot(data_folder, sp, cluster, trial_num, stim_time, make_plot=False):
     spike_counts = pd.value_counts(spike_cut).reindex(spike_cut.cat.categories)
     trial_num[cluster_str] = (spike_counts.values[::2].flatten() / stim_time[2])
 
-    counts_ori = trial_num.groupby(['orientation', 's_frequency'])[cluster_str].mean()
-    counts_sf = trial_num.groupby(['s_frequency', 'orientation'])[cluster_str].mean()
-    sem_ori = trial_num.groupby(['orientation', 's_frequency'])[cluster_str].sem()
-    sem_sf = trial_num.groupby(['s_frequency', 'orientation'])[cluster_str].sem()
+    counts_ori = trial_num.groupby([var1, var2])[cluster_str].mean()
+    counts_sf = trial_num.groupby([var2, var1])[cluster_str].mean()
+    sem_ori = trial_num.groupby([var1, var2])[cluster_str].sem()
+    sem_sf = trial_num.groupby([var2, var1])[cluster_str].sem()
 
     s_freq_max = counts_ori.drop(256).unstack(level=1).mean(axis=0).idxmax()
     orientation_max = counts_ori.drop(256).unstack(level=1).mean(axis=1).idxmax()
+
+    return counts_ori, counts_sf, sem_ori, sem_sf, s_freq_max, orientation_max, trial_num
+
+
+def orisf_plot(data_folder, sp, cluster, trial_num, stim_time, make_plot=False):
+    counts_ori, counts_sf, sem_ori, sem_sf, s_freq_max, orientation_max, trial_num_new = orisf_group(sp, cluster,
+                                                                                                     trial_num,
+                                                                                                     stim_time,
+                                                                                                     'ori',
+                                                                                                     's_freq')
+    cluster_str = 'cluster' + str(cluster)
 
     if make_plot:
         fig, (ax1, ax2) = plt.subplots(2, 1)
@@ -1256,9 +1279,72 @@ def orisf_plot(data_folder, sp, cluster, trial_num, stim_time, make_plot=False):
         plt.savefig(data_folder + '_images/' + cluster_str + '_all.pdf', bbox_inches='tight', format='pdf')
         plt.close()
 
-    return trial_num
+    return trial_num_new
+
+
+def orisf_counts(sp, cluster, trial_num, stim_time):
+    counts_ori, counts_sf, sem_ori, sem_sf, s_freq_max, orientation_max, trial_num = orisf_group(sp, cluster,
+                                                                                                 trial_num, stim_time,
+                                                                                                 'ori', 's_freq')
+
+    counts_dir, counts_sf_dir, sem_dir, sem_sf_dir, s_freq_max, dir_max, trial_num = orisf_group(sp, cluster,
+                                                                                         trial_num, stim_time,
+                                                                                         'direction', 's_freq')
+
+    sf_counts = counts_dir.drop(256)[dir_max]
+    sf_error = sem_dir.drop(256)[dir_max]
+
+    ori_counts = counts_sf.drop(256)[s_freq_max]
+    ori_error = sem_sf.drop(256)[s_freq_max]
+
+    dir_counts = counts_sf_dir.drop(256)[s_freq_max]
+    dir_error = sem_sf_dir.drop(256)[s_freq_max]
+
+    baseline = counts_dir[256]
+    baseline_error = sem_dir[256]
+
+    r_pref = ori_counts.max() - baseline
+    ori_pref = ori_counts.idxmax()
+    if ori_pref <= 60:
+        r_orth = ori_counts[ori_pref + 90] - baseline
+    else:
+        r_orth = ori_counts[ori_pref - 90] - baseline
+
+    osi = (r_pref - r_orth) / r_pref
+
+    r_pref_dir = dir_counts.max() - baseline
+    dir_pref = dir_counts.idxmax()
+
+    if dir_pref < 180:
+        try:
+            r_null = dir_counts[dir_pref + 180] - baseline
+        except KeyError:
+            r_null = dir_counts[dir_pref + 150] - baseline
+
+    else:
+        r_null = dir_counts[dir_pref - 180] - baseline
+
+    dsi = (r_pref_dir - r_null) / r_pref_dir
+
+    return sf_counts, sf_error, ori_counts, ori_error, dir_counts, dir_error, baseline, baseline_error, osi, dsi
 
 
 def plot_lim(min, max):
     lim = np.max(np.abs(np.array([min, max])))
     return lim
+
+
+def get_probe_geo():
+    probe_geo = np.zeros([128, 2])
+    probe_geo[1::2, 0] = 1
+    probe_geo[0::2, 1] = np.arange(64)
+    probe_geo[1::2, 1] = probe_geo[0::2, 1]
+    ref_sites_idx = np.array([1, 18, 33, 50, 65, 82, 97, 114]) - 1
+    ref_sites = probe_geo[ref_sites_idx, :]
+    probe_geo = np.delete(probe_geo, ref_sites_idx, axis=0)
+    return probe_geo
+
+
+def gaus(x, a, x0, sigma):
+    from scipy import asarray as ar, exp
+    return a*exp(-(x-x0)**2/(2*sigma**2))
