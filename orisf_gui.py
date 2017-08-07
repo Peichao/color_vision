@@ -279,9 +279,12 @@ class ApplicationWindow(AppWindowParent):
         if not os.path.exists(self.data_folder + '/stim_samples.npy'):
             data_path = glob.glob(self.data_folder + '/*.nidq.bin')[0]
 
-            self.trial_info['stim_start'] = functions.get_stim_samples_pg(data_path, 0)[1::3] / 25000
+            try:
+                self.trial_info['stim_start'] = functions.get_stim_samples_pg(data_path, 0)[1::3] / 25000
+            except ValueError:
+                self.trial_info['stim_start'] = functions.get_stim_samples_pg(data_path, 0) / 25000
             # self.trial_info['stim_start'] = functions.get_stim_samples_pg(data_path, 0) / 25000
-            np.save(os.path.dirname(data_path) + '/stim_samples.npy', self.trial_num.stim_start * 25000)
+            np.save(os.path.dirname(data_path) + '/stim_samples.npy', self.trial_info.stim_start * 25000)
         else:
             try:
                 self.trial_info['stim_start'] = np.load(self.data_folder + '/stim_samples.npy')[1::3] / 25000

@@ -29,7 +29,7 @@ class RecordingInfo(object):
         #     exp_info = pd.read_excel(excel_path, header=None, names=['analyzer', 'start_time', 'end_time', 'stim'])
 
         data_path = glob.glob(data_folder + '*nidq.bin')[0]
-        jrclust_path = glob.glob(data_folder + '*.csv')[0]
+        jrclust_path = glob.glob(data_folder + '*imec2.csv')[0]
         analyzer_path = glob.glob(data_folder + '*.analyzer')[0]
 
         self.sp = functions.jrclust_csv(jrclust_path)
@@ -68,6 +68,7 @@ class RFMplCanvas(MplCanvas):
         self.point_plot = None
         self.slider_ax = None
         self.slider = None
+        self.starting_latency = None
 
         self.tau_range = np.arange(-0.2, 0, 0.001)
 
@@ -109,7 +110,7 @@ class RFMplCanvas(MplCanvas):
 
             self.revcorr_images = np.zeros([xN.astype(int), yN.astype(int), self.tau_range.size])
             revcorr_results = functions.revcorr(self.tau_range, self.spike_times, self.recording_info.trials,
-                                                self.revcorr_images, image_array, cond)
+                                                image_array, cond)
             # progdialog.close()
 
             for im in range(len(revcorr_results)):
@@ -136,6 +137,7 @@ class RFMplCanvas(MplCanvas):
             self.slider_ax.cla()
             self.slider = Slider(self.slider_ax, 'Tau', 0.001, 0.20, valinit=-self.tau_range[starting_ind[2]])
             self.slider.valtext.set_text('{:03.3f}'.format(-self.tau_range[starting_ind[2]]))
+            self.starting_latency = self.tau_range[starting_ind[2]]
             self.slider.on_changed(self.update_slider)
             self.slider.drawon = False
 
@@ -195,6 +197,36 @@ class PointMplCanvas(MplCanvas):
 class LatencyMplCanvas(MplCanvas):
     def compute_latencies(self, clusters, latencies):
         pass
+    
+
+class SummaryMplCanvas(FigureCanvas):
+    def __init__(self, parent=None, width=5, height=5, dpi=100):
+        self.fig, (self.ax1, self.ax2, self.ax3) = plt.subplots(1, 3, sharey='row', figsize=(width, height), dpi=dpi)
+
+        FigureCanvas.__init__(self, self.fig)
+
+        FigureCanvas.setSizePolicy(self, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        FigureCanvas.updateGeometry(self)
+
+    def compute_selectivity(self, summary_df, rf_list):
+        bin_width = 5
+        bins = np.arange(summary_df.relative_depth.min(), summary_df.relative_depth.max() + bin_width, bin_width)
+
+        summary_df[summary_df.rf == 'On']['relative_depth'].plot(kind='hist', ax=self.ax1, color='#E24A33',
+                                                                 orientation='horizontal', bins=bins)
+        summary_df[summary_df.rf == 'Off']['relative_depth'].plot(kind='hist', ax=self.ax2, color='#348ABD',
+                                                                  orientation='horizontal', bins=bins)
+        summary_df[summary_df.rf == 'Oriented']['relative_depth'].plot(kind='hist', ax=self.ax3, color='#777777',
+                                                                       orientation='horizontal', bins=bins)
+        self.ax1.set_xlabel('ON cells')
+        self.ax2.set_xlabel('OFF cells')
+        self.ax3.set_xlabel('ON/OFF cells')
+        self.ax1.set_ylabel('Depth from Bottom of Layer 4C')
+        self.ax1.xaxis.set_tick_params(labelsize=6)
+        self.ax1.yaxis.set_tick_params(labelsize=6)
+        self.fig.tight_layout()
+        self.fig.canvas.draw()
+        pass
 
 
 class AppWindowParent(QtWidgets.QMainWindow):
@@ -203,6 +235,17 @@ class AppWindowParent(QtWidgets.QMainWindow):
         self.setAttribute(QtCore.Qt.WA_DeleteOnClose)
         self.main_widget = QtWidgets.QWidget(self)
         self.l = QtWidgets.QGridLayout(self.main_widget)
+
+
+class SummaryWindow(AppWindowParent):
+    def __init__(self, app_window=None):
+        AppWindowParent.__init__(self)
+        self.app_window = app_window
+        self.selectivity = SummaryMplCanvas(self.main_widget, width=15, height=10, dpi=100)
+        self.l.addWidget(self.selectivity)
+
+        self.main_widget.setFocus()
+        self.setCentralWidget(self.main_widget)
 
 
 class LatencyWindow(AppWindowParent):
@@ -223,6 +266,8 @@ class ApplicationWindow(AppWindowParent):
 
         self.param_path = None
         self.trial_info = None
+        self.params = None
+        self.cluster_info = None
         self.cluster = 1
         self.load_click_flag = 0
         self.process_click_flag = 0
@@ -232,8 +277,8 @@ class ApplicationWindow(AppWindowParent):
         file_menu.addAction('&Load', self.load_clicked, QtCore.Qt.CTRL + QtCore.Qt.Key_L)
         file_menu.addAction('&Quit', self.file_quit, QtCore.Qt.CTRL + QtCore.Qt.Key_Q)
 
-        self.receptive_field = RFMplCanvas(self.main_widget, width=5, height=5, dpi=100)
-        self.rf_point = PointMplCanvas(self.main_widget, width=5, height=5, dpi=100)
+        self.receptive_field = RFMplCanvas(self.main_widget, width=30, height=30, dpi=100)
+        self.rf_point = PointMplCanvas(self.main_widget, width=30, height=30, dpi=100)
         self.navi_toolbar1 = NavigationToolbar(self.receptive_field, self)
         self.l.addWidget(self.navi_toolbar1, 1, 0, 1, 6)
 
@@ -241,12 +286,20 @@ class ApplicationWindow(AppWindowParent):
         self.l.addWidget(self.rf_point, 3, 0, 1, 6)
 
         load_button = QtWidgets.QPushButton('Load File')
-        self.l.addWidget(load_button, 0, 0, 1, 3)
+        self.l.addWidget(load_button, 0, 0, 1, 2)
         load_button.clicked.connect(self.load_clicked)
 
         self.process_button = QtWidgets.QPushButton('Process All Clusters')
-        self.l.addWidget(self.process_button, 0, 3, 1, 3)
+        self.l.addWidget(self.process_button, 0, 2, 1, 2)
         self.process_button.setEnabled(False)
+
+        self.process_menu = self.bar.addMenu('Process')
+        self.process_menu.addAction('Plot Summary', self.summary_clicked)
+
+        self.save_button = QtWidgets.QPushButton('Save RF Info')
+        self.l.addWidget(self.save_button, 0, 4, 1, 2)
+        self.save_button.clicked.connect(self.save_clicked)
+        self.save_button.setEnabled(False)
 
         cluster_label = QtWidgets.QLabel()
         cluster_label.setText('Cluster:')
@@ -278,6 +331,24 @@ class ApplicationWindow(AppWindowParent):
         self.cluster_details.setReadOnly(True)
         self.l.addWidget(self.cluster_details, 3, 6, 2, 1)
 
+        self.cluster_options = QtWidgets.QVBoxLayout()
+
+        self.sc_list = ['Simple', 'Complex']
+        self.rf_list = ['On', 'Off', 'Oriented', 'None']
+
+        self.sc_box, self.sc_button_group = self.create_radiobutton_group('Select cell type:', self.sc_list)
+        self.sc_button_group.buttonClicked.connect(self.sc_clicked)
+        self.rf_box, self.rf_button_group = self.create_radiobutton_group('Select RF organization:', self.rf_list)
+        self.rf_button_group.buttonClicked.connect(self.rf_clicked)
+        latency_label = QtWidgets.QLabel()
+        latency_label.setText('Latency (ms):')
+        self.latency_edit = QtWidgets.QLineEdit()
+
+        self.cluster_options.addWidget(self.sc_box)
+        self.cluster_options.addWidget(self.rf_box)
+        self.cluster_options.addWidget(latency_label)
+        self.cluster_options.addWidget(self.latency_edit)
+
         self.main_widget.setFocus()
         self.setCentralWidget(self.main_widget)
 
@@ -289,42 +360,69 @@ class ApplicationWindow(AppWindowParent):
         if self.param_path[0] == "":
             return
         self.statusBar().showMessage('Loaded %s' % self.param_path[0])
-        self.trial_info = RecordingInfo(self.param_path[0])
         data_folder = os.path.dirname(self.param_path[0])
 
-        analyzer_path = glob.glob(data_folder + '/*.analyzer')[0]
-        import scipy.io as sio
-        analyzer_complete = sio.loadmat(analyzer_path, squeeze_me=True, struct_as_record=False)
-        analyzer = analyzer_complete['Analyzer']
+        self.trial_info = RecordingInfo(self.param_path[0])
 
-        x_size = float(analyzer.P.param[5][2])
-        y_size = float(analyzer.P.param[6][2])
-        min_sf = float(analyzer.P.param[17][2])
-        max_sf = float(analyzer.P.param[18][2])
+        self.cluster_info = pd.DataFrame(self.trial_info.sp[self.trial_info.sp.cluster > 0].groupby('cluster').
+                                         agg(lambda x: x.value_counts().index[0]).max_site, columns=['max_site'])
+
+        self.cluster_info.insert(0, 'date', os.path.dirname(data_folder)[-8:])
+        self.cluster_info.insert(1, 'exp_name', os.path.split(data_folder)[1])
+        csd_info = pd.read_csv("csd_borders.csv")
+        probe_geo = functions.get_probe_geo()
+
+        date = int(os.path.dirname(data_folder)[-8:])
+        self.cluster_info['csd_bottom'] = csd_info[csd_info.date == date].bottom.values[0]
+        self.cluster_info['csd_top'] = csd_info[csd_info.date == date].top.values[0]
+        self.cluster_info['relative_depth'] = probe_geo[:, 1][self.cluster_info.max_site - 1] - \
+            csd_info[csd_info.date == date].bottom.values[0]
+
+        self.cluster_info['sc'] = 'Complex'
+        self.cluster_info['rf'] = 'None'
+        self.cluster_info['latency'] = 0.0
+
+        analyzer_path = glob.glob(data_folder + '/*.analyzer')[0]
+        analyzer = functions.load_analyzer(analyzer_path)
+
+        self.params = functions.analyzer_params(analyzer_path)
+        x_size = self.params['x_size']
+        y_size = self.params['y_size']
+        min_sf = self.params['min_sf']
+        max_sf = self.params['max_sf']
+        colorspace = self.params['colorspace']
+        self.cluster_info['colorspace'] = colorspace
         screen_dist = int(analyzer.M.screenDist)
 
         self.exp_details.clear()
         self.exp_details.append("<html><b>Recording Details</b></html>")
-        self.exp_details.append('Date: \t%s' % os.path.dirname(data_folder)[-8:])
+        self.exp_details.append('Date: \t\t%s' % os.path.dirname(data_folder)[-8:])
         self.exp_details.append('Recording: \t%s' % os.path.split(data_folder)[1])
-        self.exp_details.append('Clusters: \t%d' %
+        self.exp_details.append('Clusters: \t\t%d' %
                                 np.unique(self.trial_info.sp.cluster[self.trial_info.sp.cluster > 0]).size)
-        self.exp_details.append('X size: \t%.2f degrees' % (x_size / 2))
-        self.exp_details.append('Y size: \t%.2f degrees' % (y_size / 2))
-        self.exp_details.append('Distance: \t%d cm' % screen_dist)
-        self.exp_details.append('Min. SF: \t%.1f cpd' % min_sf)
-        self.exp_details.append('Max. SF: \t%.1f cpd' % max_sf)
+        self.exp_details.append('X size: \t\t%.2f deg' % (x_size / 2))
+        self.exp_details.append('Y size: \t\t%.2f deg' % (y_size / 2))
+        self.exp_details.append('Distance: \t\t%d cm' % screen_dist)
+        self.exp_details.append('Min. SF: \t\t%.1f cpd' % min_sf)
+        self.exp_details.append('Max. SF: \t\t%.1f cpd' % max_sf)
 
         self.process_button.setEnabled(True)
+        self.save_button.setEnabled(True)
         self.process_button.clicked.connect(self.process_clicked)
 
         self.cluster_button.setEnabled(True)
         self.cluster_button.clicked.connect(self.enter_press)
+        self.l.addLayout(self.cluster_options, 1, 7, 2, 1)
 
         if self.load_click_flag == 0:
-            self.process_menu = self.bar.addMenu('Process')
             self.process_menu.addAction('Process All Clusters', self.process_clicked, QtCore.Qt.CTRL + QtCore.Qt.Key_P)
             self.load_click_flag += 1
+
+    def save_clicked(self):
+        data_folder = os.path.dirname(self.param_path[0])
+        date = int(os.path.dirname(data_folder)[-8:])
+        self.cluster_info.to_csv(data_folder + '/cluster_info.csv')
+        self.cluster_info.to_csv('F:/NHP/%s.csv' % date)
 
     def process_clicked(self):
         clusters = np.unique(self.trial_info.sp.cluster[self.trial_info.sp.cluster > 0])
@@ -365,6 +463,9 @@ class ApplicationWindow(AppWindowParent):
                                                     cluster=self.cluster,
                                                     param_path=self.param_path[0],
                                                     point_plot=self.rf_point)
+        self.cluster_info.set_value(self.cluster, 'latency', -self.receptive_field.starting_latency)
+        self.latency_edit.setText(str(-self.receptive_field.starting_latency))
+
         self.cluster_details.clear()
         self.cluster_details.append("<html><b>Cluster %d Details</b></html>" % self.cluster)
         self.cluster_details.append('Max Site: \t%d' %
@@ -381,9 +482,48 @@ class ApplicationWindow(AppWindowParent):
     def file_quit(self):
         self.close()
 
+    def create_radiobutton_group(self, title, button_list):
+        group_box = QtWidgets.QGroupBox(title)
+        radio_button_group = QtWidgets.QButtonGroup()
+        vbox = QtWidgets.QVBoxLayout()
+
+        radios = []
+        for button in button_list:
+            radios.append(QtWidgets.QRadioButton(button))
+
+        for i, each in enumerate(radios):
+            vbox.addWidget(each)
+            radio_button_group.addButton(each)
+            radio_button_group.setId(each, i)
+
+        group_box.setLayout(vbox)
+
+        return group_box, radio_button_group
+
+    def sc_clicked(self):
+        self.cluster_info.set_value(self.cluster, 'sc', self.sc_button_group.checkedButton().text())
+
+    def rf_clicked(self):
+        self.cluster_info.set_value(self.cluster, 'rf', self.rf_button_group.checkedButton().text())
+
+    def summary_clicked(self):
+        csv_path = QtWidgets.QFileDialog.getExistingDirectory(self, 'Open Folder of CSV Files')
+        try:
+            csv_path
+        except NameError:
+            return
+
+        csv_files = glob.glob(os.path.join(csv_path, '*.csv'))
+        summary_df = pd.concat(pd.read_csv(f) for f in csv_files)
+
+        self.selectivity_chart = SummaryWindow(self)
+        self.selectivity_chart.show()
+
+        self.selectivity_chart.selectivity.compute_selectivity(summary_df, self.rf_list)
+
 if __name__ == '__main__':
     qApp = QtWidgets.QApplication(sys.argv)
     aw = ApplicationWindow()
     aw.setWindowTitle('%s' % progname)
-    aw.show()
+    aw.showMaximized()
     sys.exit(qApp.exec_())

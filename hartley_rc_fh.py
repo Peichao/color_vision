@@ -51,3 +51,14 @@ for i in range(1, 74):
     revcorr_images_f = loadz['images_f']
     sio.savemat(data_folder + 'revcorr_images_f_%d.mat' % cluster, {'revcorr_images_f': revcorr_images_f})
     sio.savemat(data_folder + 'spike_times_%d.mat' % cluster, mdict={'spike_times': sp[sp.cluster == cluster].time.as_matrix()})
+
+data_path = "F:/NHP/hartley_units/scone/20160919_scone.csv"
+date = 20160919
+csd_info = pd.read_csv("csd_borders.csv")
+hartley_units = pd.read_csv(data_path, index_col=0)
+hartley_units['csd_top'] = 31
+hartley_units['csd_bottom'] = 11
+probe_geo = functions.probe_geo
+hartley_units['relative_depth'] = probe_geo[:, 1][hartley_units.max_site - 1] - \
+                                  hartley_units['csd_bottom'][1]
+hartley_units.to_csv(data_path)

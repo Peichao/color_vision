@@ -295,7 +295,7 @@ def get_stim_samples_fh(data_path, start_time, end_time=None):
         data = pd.DataFrame(data[128, start_time * 25000:], columns=['photodiode'])
 
     hi_cut = 1400
-    lo_cut = 750
+    lo_cut = 500
 
     from detect_peaks import detect_peaks
     peaks = detect_peaks(data.photodiode.as_matrix(), mph=lo_cut, mpd=200)
@@ -362,27 +362,49 @@ def get_stim_samples_pg(data_path, start_time, end_time=None):
     return stim_times
 
 
-def analyzer_pg(analyzer_path):
+def load_analyzer(analyzer_path):
     analyzer_complete = sio.loadmat(analyzer_path, squeeze_me=True, struct_as_record=False)
     analyzer = analyzer_complete['Analyzer']
+    return analyzer
+
+
+def analyzer_pg(analyzer_path):
+    analyzer = load_analyzer(analyzer_path)
 
     b_flag = 0
-    if analyzer.loops.conds[len(analyzer.loops.conds) - 1].symbol[0] == 'blank':
-        b_flag = 1
+    if type(analyzer.loops.conds[len(analyzer.loops.conds) - 1].symbol) != str:
+        if analyzer.loops.conds[len(analyzer.loops.conds) - 1].symbol[0] == 'blank':
+            b_flag = 1
+    else:
+        if analyzer.loops.conds[len(analyzer.loops.conds) - 1].symbol == 'blank':
+            b_flag = 1
 
     if b_flag == 0:
-        trial_num = np.zeros((len(analyzer.loops.conds) * len(analyzer.loops.conds[0].repeats),
-                             (len(analyzer.loops.conds[0].symbol))))
+        if type(analyzer.loops.conds[0].symbol) != str:
+            trial_num = np.zeros((len(analyzer.loops.conds) * len(analyzer.loops.conds[0].repeats),
+                                 (len(analyzer.loops.conds[0].symbol))))
+        else:
+            trial_num = np.zeros((len(analyzer.loops.conds) * len(analyzer.loops.conds[0].repeats), 1))
     else:
-        trial_num = np.zeros(((len(analyzer.loops.conds) - b_flag) * len(analyzer.loops.conds[0].repeats) +
-                              len(analyzer.loops.conds[-1].repeats),
-                              (len(analyzer.loops.conds[0].symbol))))
+        if type(analyzer.loops.conds[0].symbol) != str:
+            trial_num = np.zeros(((len(analyzer.loops.conds) - b_flag) * len(analyzer.loops.conds[0].repeats) +
+                                  len(analyzer.loops.conds[-1].repeats),
+                                  (len(analyzer.loops.conds[0].symbol))))
+        else:
+            trial_num = np.zeros(((len(analyzer.loops.conds) - b_flag) * len(analyzer.loops.conds[0].repeats) +
+                                  len(analyzer.loops.conds[-1].repeats), 1))
 
     for count in range(0, len(analyzer.loops.conds) - b_flag):
-        trial_vals = np.zeros(len(analyzer.loops.conds[count].symbol))
+        if type(analyzer.loops.conds[count].symbol) != str:
+            trial_vals = np.zeros(len(analyzer.loops.conds[count].symbol))
+        else:
+            trial_vals = np.zeros(1)
 
-        for count2 in range(0, len(analyzer.loops.conds[count].symbol)):
-            trial_vals[count2] = analyzer.loops.conds[count].val[count2]
+        try:
+            for count2 in range(0, len(analyzer.loops.conds[count].symbol)):
+                trial_vals[count2] = analyzer.loops.conds[count].val[count2]
+        except (TypeError, IndexError) as e:
+                trial_vals[0] = analyzer.loops.conds[count].val
 
         for count3 in range(0, len(analyzer.loops.conds[count].repeats)):
             aux_trial = analyzer.loops.conds[count].repeats[count3].trialno
@@ -390,13 +412,22 @@ def analyzer_pg(analyzer_path):
 
     for blank_trial in range(0, len(analyzer.loops.conds[-1].repeats)):
         aux_trial = analyzer.loops.conds[-1].repeats[blank_trial].trialno
-        trial_num[aux_trial - 1, :] = np.array([256, 256])
+        trial_num[aux_trial - 1, :] = np.ones(trial_num.shape[1]) * 256
 
     stim_time = np.zeros(3)
     for count4 in range(0, 3):
         stim_time[count4] = analyzer.P.param[count4][2]
 
     return trial_num, stim_time
+
+
+def analyzer_params(analyzer_path):
+    analyzer = load_analyzer(analyzer_path)
+    params = {}
+    for param in analyzer.P.param:
+        params[param[0]] = param[2]
+
+    return params
 
 
 def analyzer_pg_conds(analyzer_path):
@@ -406,8 +437,11 @@ def analyzer_pg_conds(analyzer_path):
     analyzer = analyzer_complete['Analyzer']
 
     columns = []
-    for i in analyzer.L.param:
-        columns.append(i[0])
+    if type(analyzer.L.param[0]) != str:
+        for i in analyzer.L.param:
+                columns.append(i[0])
+    else:
+        columns.append(analyzer.L.param[0])
 
     trial_info = pd.DataFrame(trial_num, columns=columns)
     return trial_info, stim_time
@@ -592,7 +626,7 @@ def get_baseline_circle(max_sf, revcorr_image_f, tau_range, sfx_vals, sfy_vals):
 
 class RevcorrObject(object):
     def __init__(self, params):
-        self.i, self.tau, self.spike_times, self.trials, self.revcorr_images, self.image_array, self.conditions = params
+        self.i, self.tau, self.spike_times, self.trials, self.image_array, self.conditions = params
 
 
 def revcorr_ind(obj):
@@ -605,17 +639,73 @@ def revcorr_ind(obj):
     return np.average(obj.image_array, axis=2, weights=idx_weights[0])
 
 
-def revcorr(tau_range, spike_times, trials, revcorr_images, image_array, conditions):
-    object_list = []
-    for i, tau in enumerate(tau_range):
-        object_list.append(RevcorrObject((i, tau,
-                                          spike_times, trials, revcorr_images, image_array, conditions)))
-    pool = multiprocessing.Pool()
-    results = pool.map(revcorr_ind, object_list)
-    pool.close()
-    pool.join()
+def revcorr(tau_range, spike_times, trials, image_array, conditions):
+    # object_list = []
+    # for i, tau in enumerate(tau_range):
+    #     object_list.append(RevcorrObject((i, tau,
+    #                                       spike_times, trials, image_array, conditions)))
+    # pool = multiprocessing.Pool()
+    # results = pool.map(revcorr_ind, object_list)
+    # pool.close()
+    # pool.join()
 
-    return results
+    results = []
+    sfx_vals = np.sort(np.unique(trials.sf_x))
+    sfy_vals = np.sort(np.unique(trials.sf_y))
+
+    revcorr_images_f = np.zeros([np.size(sfx_vals), np.size(sfy_vals), tau_range.size])
+    stim_count = np.zeros([np.size(np.unique(trials.sf_x)), np.size(np.unique(trials.sf_y))])
+    for i, sfx in enumerate(np.unique(trials.sf_x)):
+        for j, sfy in enumerate(np.unique(trials.sf_y)):
+            stim_count[i, j] = stim_count[i, j] + trials[(trials.sf_x == sfx) &
+                                                         (trials.sf_y == sfy)].shape[0]
+
+    for i, tau in enumerate(tau_range):
+        print('Analyzing time lag of %.3f seconds.' % -tau)
+        spike_times_new = spike_times + tau
+        cond, image_kx, image_ky, image_sfx, image_sfy = get_image_info(trials, spike_times_new)
+        idx_weights = np.histogram(cond, bins=np.arange(0, conditions.shape[0] + 1))
+        results.append(np.average(image_array, axis=2, weights=idx_weights[0]))
+
+        image_sfx_ind = np.searchsorted(sfx_vals, image_sfx)
+        image_sfy_ind = np.searchsorted(sfy_vals, image_sfy)
+        np.add.at(revcorr_images_f[:, :, i], [image_sfx_ind, image_sfy_ind], 1)
+        revcorr_images_f[:, :, i] = revcorr_images_f[:, :, i] / stim_count
+
+    return results, revcorr_images_f
+
+
+def revcorr_f(tau_range, spike_times, trials):
+    # object_list = []
+    # for i, tau in enumerate(tau_range):
+    #     object_list.append(RevcorrObject((i, tau,
+    #                                       spike_times, trials, image_array, conditions)))
+    # pool = multiprocessing.Pool()
+    # results = pool.map(revcorr_ind, object_list)
+    # pool.close()
+    # pool.join()
+
+    sfx_vals = np.sort(np.unique(trials.sf_x))
+    sfy_vals = np.sort(np.unique(trials.sf_y))
+
+    revcorr_images_f = np.zeros([np.size(sfx_vals), np.size(sfy_vals), tau_range.size])
+    stim_count = np.zeros([np.size(np.unique(trials.sf_x)), np.size(np.unique(trials.sf_y))])
+    for i, sfx in enumerate(np.unique(trials.sf_x)):
+        for j, sfy in enumerate(np.unique(trials.sf_y)):
+            stim_count[i, j] = stim_count[i, j] + trials[(trials.sf_x == sfx) &
+                                                         (trials.sf_y == sfy)].shape[0]
+
+    for i, tau in enumerate(tau_range):
+        print('Analyzing time lag of %.3f seconds.' % -tau)
+        spike_times_new = spike_times + tau
+        cond, image_kx, image_ky, image_sfx, image_sfy = get_image_info(trials, spike_times_new)
+
+        image_sfx_ind = np.searchsorted(sfx_vals, image_sfx)
+        image_sfy_ind = np.searchsorted(sfy_vals, image_sfy)
+        np.add.at(revcorr_images_f[:, :, i], [image_sfx_ind, image_sfy_ind], 1)
+        revcorr_images_f[:, :, i] = revcorr_images_f[:, :, i] / stim_count
+
+    return revcorr_images_f
 
 
 class GetLayers(object):
@@ -1348,3 +1438,61 @@ def get_probe_geo():
 def gaus(x, a, x0, sigma):
     from scipy import asarray as ar, exp
     return a*exp(-(x-x0)**2/(2*sigma**2))
+
+
+def butterworthbpf(img, d0, d1, n):
+    f = np.double(img)
+    f_size = np.shape(f)
+    nx = f_size[0]
+    ny = f_size[1]
+
+    fft_I = np.fft.fft2(f, [2*nx-1, 2*ny-1])
+    fft_I = np.fft.fftshift(fft_I)
+
+    # initialize filter
+    filter1 = np.ones([2*nx - 1, 2*ny - 1])
+    filter2 = np.ones([2*nx - 1, 2*ny - 1])
+    filter3 = np.ones([2*nx - 1, 2*ny - 1])
+
+    for i in range(1, 2*nx):
+        for j in range(1, 2*ny):
+            dist = ((i-(nx + 1)) ** 2 + (j-(ny+1)) ** 2) ** 0.5
+            # create butterworth filter
+            filter1[i-1, j-1] = 1/(1 + (dist/d1) ** (2*n))
+            filter2[i-1, j-1] = 1/(1 + (dist/d0) ** (2*n))
+            filter3[i-1, j-1] = 1.0 - filter2[i-1, j-1]
+            filter3[i-1, j-1] = filter1[i-1, j-1]*filter3[i-1, j-1]
+
+    # update image with passed frequencies
+    filtered_image = fft_I + filter3*fft_I
+    filtered_image = np.fft.ifftshift(filtered_image)
+    filtered_image = np.fft.ifft2(filtered_image, [2*nx-1, 2*ny-1])
+    filtered_image = np.real(filtered_image[0:nx, 0:ny])
+
+    return filtered_image
+
+
+def isi_clip(img, value):
+    """
+
+    :param img: input array of ISI
+    :param value: clip image to +/- SD * value
+    :return:
+    """
+    sx, sy = img.shape
+
+    re_img = np.reshape(img, [(sx*sy), 1])
+    re_med = np.median(re_img)
+    re_std = np.std(re_img)
+
+    lo_clip = re_med - (value*re_std)
+    hi_clip = re_med + (value*re_std)
+
+    lo_temp = (img > lo_clip).astype(int)
+    hi_temp = (img > hi_clip).astype(int)
+
+    temp_between = (lo_temp * hi_temp) * img
+    frame_2 = temp_between + (hi_clip*np.invert(hi_temp))
+    im_result = frame_2 + (lo_clip * np.invert(lo_temp))
+
+    return im_result

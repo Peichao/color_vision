@@ -18,7 +18,7 @@ progversion = "0.1"
 
 
 class RecordingInfo(object):
-    def __init__(self, params_path=None, start_time=0, end_time=None):
+    def __init__(self, params_path=None, start_time=0.0, end_time=None):
         data_folder = os.path.dirname(params_path) + '/'
 
         data_path = glob.glob(data_folder + '*nidq.bin')[0]
@@ -34,6 +34,7 @@ class RecordingInfo(object):
         else:
             self.trials['stim_sample'] = np.load(data_folder + os.path.basename(params_path)[:-4] + '/stim_samples.npy')
         self.trials['stim_time'] = self.trials.stim_sample / 25000
+        self.trials['stim_time'] += start_time
 
 
 class MplCanvas(FigureCanvas):
@@ -61,6 +62,8 @@ class RFMplCanvas(MplCanvas):
 
         param_path = kwargs.pop('param_path', None)
         self.recording_info = kwargs.pop('recording_info', None)
+        self.revcorr_images = None
+        self.revcorr_images_f = None
 
         parent_folder = os.path.dirname(param_path) + '/'
         self.data_folder = parent_folder + os.path.basename(param_path)[:-4] + '/'
@@ -88,7 +91,7 @@ class RFMplCanvas(MplCanvas):
         self.slider_ax = self.fig.add_axes([0.2, 0.02, 0.6, 0.03])
         self.slider = Slider(self.slider_ax, 'Tau', 0.001, 0.20, valinit=0.001)
 
-    def compute_initial_figure(self, cluster=None, point_plot=None, plot=True, *args, **kwargs):
+    def compute_initial_figure(self, cluster=None, point_plot=None, plot=True, stim=None, *args, **kwargs):
         self.point_plot = point_plot
 
         spike_times = self.recording_info.sp.time[self.recording_info.sp.cluster == cluster].as_matrix()
@@ -103,17 +106,27 @@ class RFMplCanvas(MplCanvas):
 
         if not os.path.exists(self.data_folder + 'revcorr_images_%d.npy' % cluster):
             revcorr_images = np.zeros([self.xN.astype(int), self.yN.astype(int), self.tau_range.size])
-            revcorr_results = functions.revcorr(self.tau_range, spike_times, self.recording_info.trials,
-                                                revcorr_images, self.image_array, self.cond)
+            revcorr_results, self.revcorr_images_f = functions.revcorr(self.tau_range, spike_times,
+                                                                       self.recording_info.trials,
+                                                                       self.image_array, self.cond)
 
             for im in range(len(revcorr_results)):
                 revcorr_images[:, :, im] = revcorr_results[im]
 
             np.save(self.data_folder + 'revcorr_images_%d.npy' % cluster, revcorr_images)
+            np.save(self.data_folder + 'revcorr_images_f_%d.npy' % cluster, self.revcorr_images_f)
         else:
-            revcorr_images = np.load(self.data_folder + 'revcorr_images_%d.npy' % cluster)
+            if not os.path.exists(self.data_folder + 'revcorr_images_f_%d.npy' % cluster):
+                self.revcorr_images_f = functions.revcorr_f(self.tau_range, spike_times, self.recording_info.trials)
+            else:
+                self.revcorr_images_f = np.load(self.data_folder + 'revcorr_images_f_%d.npy' % cluster, mmap_mode='r')
+                np.save(self.data_folder + 'revcorr_images_f_%d.npy' % cluster, self.revcorr_images_f)
+            revcorr_images = np.load(self.data_folder + 'revcorr_images_%d.npy' % cluster, mmap_mode='r')
 
         if plot:
+            self.ax.cla()
+
+            self.ax.axis('off')
             self.revcorr_center = revcorr_images[np.round(self.xN/4).astype(int):np.round(self.xN*3/4).astype(int),
                                                  np.round(self.yN/4).astype(int):np.round(self.yN*3/4).astype(int),
                                                  :]
@@ -133,6 +146,7 @@ class RFMplCanvas(MplCanvas):
 
             self.ax.xaxis.set_visible(False)
             self.ax.yaxis.set_visible(False)
+            self.ax.set_title(stim)
 
             self.fig.canvas.draw()
             self.fig.canvas.mpl_connect('pick_event', self.onpick)
@@ -140,6 +154,40 @@ class RFMplCanvas(MplCanvas):
             self.point_plot.compute_point_plot(self.revcorr_center, self.tau_range,
                                                starting_ind[1],
                                                starting_ind[0])
+            return plot_lim
+
+    def plot_revcorr_images_f(self):
+        self.ax.cla()
+
+        self.ax.axis('on')
+        self.ax.xaxis.set_visible(True)
+        self.ax.yaxis.set_visible(True)
+
+        starting_flat = np.argmax(np.abs(self.revcorr_center))
+        starting_ind = np.unravel_index(starting_flat, self.revcorr_center.shape)
+        plot_lim = functions.plot_lim(self.revcorr_images_f.min(), self.revcorr_images_f.max())
+
+        sfx_vals = np.sort(np.unique(self.recording_info.trials.sf_x))
+        sfy_vals = np.sort(np.unique(self.recording_info.trials.sf_y))
+
+        self.ax.set_xlim([0, 3])
+        self.ax.set_ylim([-3, 3])
+
+        self.ax.set_xlabel(r'$\omega_x$')
+        self.ax.set_ylabel(r'$\omega_y$')
+
+        self.ax.imshow(self.revcorr_images_f[:, :, starting_ind[2]].T, cmap='jet', interpolation='spline36',
+                       extent=[sfx_vals.min(), sfx_vals.max(),
+                               sfy_vals.min(), sfy_vals.max()])
+
+        self.slider.set_val(-self.tau_range[starting_ind[2]])
+        self.slider.valtext.set_text('{:03.3f}'.format(-self.tau_range[starting_ind[2]]))
+        self.slider.on_changed(self.update_slider_f)
+        self.slider.drawon = False
+
+    def update_vlim(self, plot_lim):
+        self.l.set_clim(vmin=-plot_lim, vmax=plot_lim)
+        self.fig.canvas.draw()
 
     def update_slider(self, value):
         """
@@ -148,6 +196,11 @@ class RFMplCanvas(MplCanvas):
         :return: New image presented containing shifted time window.
         """
 
+        self.l.set_data(self.revcorr_center[:, :, np.searchsorted(self.tau_range, -value)])
+        self.slider.valtext.set_text('{:03.3f}'.format(value))
+        self.fig.canvas.draw()
+
+    def update_slider_f(self, value):
         self.l.set_data(self.revcorr_center[:, :, np.searchsorted(self.tau_range, -value)])
         self.slider.valtext.set_text('{:03.3f}'.format(value))
         self.fig.canvas.draw()
@@ -203,9 +256,11 @@ class ApplicationWindow(AppWindowParent):
         self.load_click_flag = 0
         self.process_click_flag = 0
 
+        self.plot_lim = []
         self.rf_dict = {}
         self.rf_point_dict = {}
         self.rec_info_dict = {}
+        self.navi_toolbar_dict = {}
 
         self.bar = self.menuBar()
         file_menu = self.bar.addMenu('File')
@@ -223,6 +278,16 @@ class ApplicationWindow(AppWindowParent):
         self.cluster_label = QtWidgets.QLabel()
         self.cluster_label.setText('Cluster:')
         self.cluster_edit = QtWidgets.QLineEdit()
+
+        self.normalize_button = QtWidgets.QPushButton('Normalize')
+        self.normalize_button.clicked.connect(self.normalize_axes)
+        self.l.addWidget(self.normalize_button, 4, 2, 1, 1)
+        self.normalize_button.setEnabled(False)
+
+        self.frequency_button = QtWidgets.QPushButton('Plot Frequency Domain')
+        self.frequency_button.clicked.connect(self.plot_frequency)
+        self.l.addWidget(self.frequency_button, 0, 2, 1, 1)
+        self.frequency_button.setEnabled(False)
 
         self.main_widget.setFocus()
         self.setCentralWidget(self.main_widget)
@@ -243,8 +308,8 @@ class ApplicationWindow(AppWindowParent):
             if not os.path.exists(data_folder + self.exp_list.data_path[i][:-4]):
                 os.makedirs(data_folder + self.exp_list.data_path[i][:-4])
             self.rec_info_dict[self.exp_list.stim[i]] = RecordingInfo(params_path=data_folder + self.exp_list.data_path[i],
-                                                                      start_time=int(self.exp_list.start_time[i]),
-                                                                      end_time=int(self.exp_list.end_time[i]))
+                                                                      start_time=self.exp_list.start_time[i],
+                                                                      end_time=self.exp_list.end_time[i])
 
             self.rf_dict[self.exp_list.stim[i]] = RFMplCanvas(self.main_widget, width=5, height=5, dpi=100,
                                                               param_path=data_folder + self.exp_list.data_path[i],
@@ -254,8 +319,12 @@ class ApplicationWindow(AppWindowParent):
             self.rf_point_dict[self.exp_list.stim[i]] = PointMplCanvas(self.main_widget, width=5, height=5, dpi=100)
             self.l.addWidget(self.rf_point_dict[self.exp_list.stim[i]], 2, i, 1, 1)
 
-        self.l.addWidget(self.cluster_label, 3, 0, 1, 1)
-        self.l.addWidget(self.cluster_edit, 3, 1, 1, 1)
+            self.navi_toolbar_dict[self.exp_list.stim[i]] = NavigationToolbar(self.rf_dict[self.exp_list.stim[i]], self)
+            self.l.addWidget(self.navi_toolbar_dict[self.exp_list.stim[i]], 3, i, 1, 1)
+
+        self.l.addWidget(self.cluster_label, 4, 0, 1, 1)
+        self.l.addWidget(self.cluster_edit, 4, 1, 1, 1)
+
         self.cluster_edit.returnPressed.connect(self.enter_press)
         self.process_button.setEnabled(True)
         self.process_button.clicked.connect(self.process_clicked)
@@ -263,15 +332,25 @@ class ApplicationWindow(AppWindowParent):
     def enter_press(self):
         self.cluster = int(self.cluster_edit.text())
         self.update_cluster()
+        self.normalize_button.setEnabled(True)
+        self.frequency_button.setEnabled(True)
 
     def update_cluster(self):
         self.statusBar().showMessage('Selected cluster %d.' % self.cluster)
+        self.plot_lim = []
         for i in range(self.exp_list.shape[0]):
-            self.rf_dict[self.exp_list.stim[i]].compute_initial_figure(cluster=self.cluster,
-                                                                       point_plot=self.rf_point_dict[self.exp_list.stim[i]],
-                                                                       plot=True)
+            self.plot_lim.append(self.rf_dict[self.exp_list.stim[i]].compute_initial_figure(cluster=self.cluster,
+                                                                                            point_plot=self.
+                                                                                            rf_point_dict[
+                                                                                                self.exp_list.stim[i]],
+                                                                                            plot=True,
+                                                                                            stim=self.exp_list.stim[i]))
 
         self.cluster_edit.clear()
+
+    def normalize_axes(self):
+        for i in range(self.exp_list.shape[0]):
+            self.rf_dict[self.exp_list.stim[i]].update_vlim(np.max(self.plot_lim))
 
     def process_clicked(self):
         self.statusBar().showMessage('Processing all clusters.')
@@ -291,6 +370,10 @@ class ApplicationWindow(AppWindowParent):
 
     def file_quit(self):
         self.close()
+
+    def plot_frequency(self):
+        for i in range(self.exp_list.shape[0]):
+            self.rf_dict[self.exp_list.stim[i]].plot_revcorr_images_f()
 
 if __name__ == '__main__':
     qApp = QtWidgets.QApplication(sys.argv)
