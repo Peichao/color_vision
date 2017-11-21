@@ -92,3 +92,5 @@ for cell in range(1, 74):
     plt.close()
 
 plt.ion()
+
+# create stimulus sample

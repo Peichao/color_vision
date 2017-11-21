@@ -64,6 +64,7 @@ class RFMplCanvas(MplCanvas):
         self.recording_info = kwargs.pop('recording_info', None)
         self.revcorr_images = None
         self.revcorr_images_f = None
+        self.snr = None
 
         parent_folder = os.path.dirname(param_path) + '/'
         self.data_folder = parent_folder + os.path.basename(param_path)[:-4] + '/'
@@ -91,7 +92,7 @@ class RFMplCanvas(MplCanvas):
         self.slider_ax = self.fig.add_axes([0.2, 0.02, 0.6, 0.03])
         self.slider = Slider(self.slider_ax, 'Tau', 0.001, 0.20, valinit=0.001)
 
-    def compute_initial_figure(self, cluster=None, point_plot=None, plot=True, stim=None, *args, **kwargs):
+    def compute_initial_figure(self, cluster=None, point_plot=None, plot=True, stim=None, info=None, *args, **kwargs):
         self.point_plot = point_plot
 
         spike_times = self.recording_info.sp.time[self.recording_info.sp.cluster == cluster].as_matrix()
@@ -118,9 +119,9 @@ class RFMplCanvas(MplCanvas):
         else:
             if not os.path.exists(self.data_folder + 'revcorr_images_f_%d.npy' % cluster):
                 self.revcorr_images_f = functions.revcorr_f(self.tau_range, spike_times, self.recording_info.trials)
+                np.save(self.data_folder + 'revcorr_images_f_%d.npy' % cluster, self.revcorr_images_f)
             else:
                 self.revcorr_images_f = np.load(self.data_folder + 'revcorr_images_f_%d.npy' % cluster, mmap_mode='r')
-                np.save(self.data_folder + 'revcorr_images_f_%d.npy' % cluster, self.revcorr_images_f)
             revcorr_images = np.load(self.data_folder + 'revcorr_images_%d.npy' % cluster, mmap_mode='r')
 
         if plot:
@@ -130,6 +131,10 @@ class RFMplCanvas(MplCanvas):
             self.revcorr_center = revcorr_images[np.round(self.xN/4).astype(int):np.round(self.xN*3/4).astype(int),
                                                  np.round(self.yN/4).astype(int):np.round(self.yN*3/4).astype(int),
                                                  :]
+
+            var_max = np.nanvar(self.revcorr_center, axis=(0, 1)).max()
+            var_avg = np.nanvar(self.revcorr_center, axis=(0, 1)).mean()
+            self.snr = var_max / var_avg
 
             starting_flat = np.argmax(np.abs(self.revcorr_center))
             starting_ind = np.unravel_index(starting_flat, self.revcorr_center.shape)
@@ -146,7 +151,7 @@ class RFMplCanvas(MplCanvas):
 
             self.ax.xaxis.set_visible(False)
             self.ax.yaxis.set_visible(False)
-            self.ax.set_title(stim)
+            self.ax.set_title("%s, SNR = %.2f" % (stim, self.snr))
 
             self.fig.canvas.draw()
             self.fig.canvas.mpl_connect('pick_event', self.onpick)
@@ -155,6 +160,14 @@ class RFMplCanvas(MplCanvas):
                                                starting_ind[1],
                                                starting_ind[0])
             return plot_lim
+
+    def classify_sc(self, info=None, cluster=None, stim=None):
+        if self.snr > 1.5:
+            info.loc[cluster, stim] = 'simple'
+        else:
+            info.loc[cluster, stim] = 'complex'
+
+        return info
 
     def plot_revcorr_images_f(self):
         self.ax.cla()
@@ -252,6 +265,7 @@ class ApplicationWindow(AppWindowParent):
 
         self.xls_path = None
         self.trial_info = None
+        self.cluster_info = None
         self.cluster = 1
         self.load_click_flag = 0
         self.process_click_flag = 0
@@ -322,6 +336,26 @@ class ApplicationWindow(AppWindowParent):
             self.navi_toolbar_dict[self.exp_list.stim[i]] = NavigationToolbar(self.rf_dict[self.exp_list.stim[i]], self)
             self.l.addWidget(self.navi_toolbar_dict[self.exp_list.stim[i]], 3, i, 1, 1)
 
+        st = self.rec_info_dict[self.exp_list.stim[0]].sp
+        self.cluster_info = pd.DataFrame(st[st.cluster > 0].groupby('cluster').
+                                         agg(lambda x: x.value_counts().index[0]).max_site, columns=['max_site'])
+
+        data_folder = data_folder[:-1]
+
+        self.cluster_info.insert(0, 'date', os.path.dirname(data_folder)[-8:])
+        self.cluster_info.insert(1, 'exp_name', os.path.split(data_folder)[1])
+        csd_info = pd.read_csv("csd_borders.csv")
+        probe_geo = functions.get_probe_geo()
+
+        date = int(os.path.dirname(data_folder)[-8:])
+        self.cluster_info['csd_bottom'] = csd_info[csd_info.date == date].bottom.values[0]
+        self.cluster_info['csd_top'] = csd_info[csd_info.date == date].top.values[0]
+        self.cluster_info['relative_depth'] = probe_geo[:, 1][self.cluster_info.max_site - 1] - \
+            csd_info[csd_info.date == date].bottom.values[0]
+        for i in range(self.exp_list.shape[0]):
+            self.cluster_info[self.exp_list.stim[i]] = 'none'
+        self.cluster_info.to_csv('F:\\NHP\\hartley_units\\combined\\%s.csv' % os.path.dirname(data_folder)[-8:])
+
         self.l.addWidget(self.cluster_label, 4, 0, 1, 1)
         self.l.addWidget(self.cluster_edit, 4, 1, 1, 1)
 
@@ -345,7 +379,12 @@ class ApplicationWindow(AppWindowParent):
                                                                                                 self.exp_list.stim[i]],
                                                                                             plot=True,
                                                                                             stim=self.exp_list.stim[i]))
-
+            self.cluster_info = self.rf_dict[self.exp_list.stim[i]].classify_sc(info=self.cluster_info,
+                                                                                cluster=self.cluster,
+                                                                                stim=self.exp_list.stim[i])
+        data_folder = os.path.dirname(self.xls_path[0]) + '/'
+        data_folder = data_folder[:-1]
+        self.cluster_info.to_csv('F:\\NHP\\hartley_units\\combined\\%s.csv' % os.path.dirname(data_folder)[-8:])
         self.cluster_edit.clear()
 
     def normalize_axes(self):
@@ -374,6 +413,7 @@ class ApplicationWindow(AppWindowParent):
     def plot_frequency(self):
         for i in range(self.exp_list.shape[0]):
             self.rf_dict[self.exp_list.stim[i]].plot_revcorr_images_f()
+
 
 if __name__ == '__main__':
     qApp = QtWidgets.QApplication(sys.argv)

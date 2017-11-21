@@ -410,9 +410,10 @@ def analyzer_pg(analyzer_path):
             aux_trial = analyzer.loops.conds[count].repeats[count3].trialno
             trial_num[aux_trial - 1, :] = trial_vals
 
-    for blank_trial in range(0, len(analyzer.loops.conds[-1].repeats)):
-        aux_trial = analyzer.loops.conds[-1].repeats[blank_trial].trialno
-        trial_num[aux_trial - 1, :] = np.ones(trial_num.shape[1]) * 256
+    if b_flag == 1:
+        for blank_trial in range(0, len(analyzer.loops.conds[-1].repeats)):
+            aux_trial = analyzer.loops.conds[-1].repeats[blank_trial].trialno
+            trial_num[aux_trial - 1, :] = np.ones(trial_num.shape[1]) * 256
 
     stim_time = np.zeros(3)
     for count4 in range(0, 3):
@@ -452,9 +453,9 @@ def jrclust_csv(csv_path):
     return sp
 
 
-def kilosort_info(data_folder):
+def kilosort_info(data_folder, fs=25000):
     sp = pd.DataFrame()
-    sp['time'] = np.load(data_folder + 'spike_times.npy').flatten() / 25000
+    sp['time'] = np.load(data_folder + 'spike_times.npy').flatten() / fs
     sp['cluster'] = np.load(data_folder + 'spike_clusters.npy')
     return sp
 
@@ -1481,7 +1482,7 @@ def isi_clip(img, value):
     """
     sx, sy = img.shape
 
-    re_img = np.reshape(img, [(sx*sy), 1])
+    re_img = img.ravel()
     re_med = np.median(re_img)
     re_std = np.std(re_img)
 
@@ -1489,10 +1490,10 @@ def isi_clip(img, value):
     hi_clip = re_med + (value*re_std)
 
     lo_temp = (img > lo_clip).astype(int)
-    hi_temp = (img > hi_clip).astype(int)
+    hi_temp = (img < hi_clip).astype(int)
 
     temp_between = (lo_temp * hi_temp) * img
-    frame_2 = temp_between + (hi_clip*np.invert(hi_temp))
-    im_result = frame_2 + (lo_clip * np.invert(lo_temp))
+    frame_2 = temp_between + (hi_clip * np.invert(hi_temp.astype(bool)).astype(int))
+    im_result = frame_2 + (lo_clip * np.invert(lo_temp.astype(bool)).astype(int))
 
     return im_result
