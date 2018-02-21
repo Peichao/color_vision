@@ -1,6 +1,8 @@
 import os
 import glob
 import numpy as np
+import scipy as sp
+from scipy import signal
 import pandas as pd
 import functions
 
@@ -8,7 +10,7 @@ data_folder = 'F:/NHP/AE4/U006/006_003_achromatic_grating/'
 analyzer_path = glob.glob(data_folder + '*.analyzer')[0]
 
 data_path = glob.glob(data_folder + '*ap.bin')[0]
-spikesort = 'kilosort'
+spikesort = 'jrclust'
 
 spikes = pd.DataFrame()
 fs = 30000
@@ -36,11 +38,13 @@ trial_num.ori[(trial_num.ori >= 180) & (trial_num.ori != 256)] = trial_num.ori[(
 respond_1 = []
 
 
-def extract_sync_samples(file_path):
+def extract_sync_samples(file_path, downsample_factor):
     num_chans = 385
 
     lfp_mm = (np.memmap(file_path, dtype='uint16', mode='r').reshape(-1, num_chans)).T
     sync_data = lfp_mm[num_chans - 1, :]
+
+    sync_data = sp.signal.decimate(sync_data, downsample_factor)
 
     sync_data_df = pd.DataFrame(sync_data, columns=['sync_data'])
     sync_data_df['binary'] = sync_data_df.sync_data.apply(lambda x: format(x, '04b'))
@@ -61,13 +65,15 @@ def get_imec_flips(imec_data, channel):
 if not os.path.exists(data_folder + 'stim_start_samples.npy'):
     # trial_num['stim_start'] = functions.get_stim_samples_pg(data_path, 0)[1::3] / 25000
 
-    imec_data = extract_sync_samples(data_path)
+    downsample_factor = 10
+    imec_data = extract_sync_samples(data_path, downsample_factor)
     imec_flips = get_imec_flips(imec_data, channel=16)
+    imec_flips *= downsample_factor
 
-    trial_num['stim_start'] = imec_flips[:, 0] / 30000
-    trial_num['stim_end'] = imec_flips[:, 1] / 30000
-    np.save(os.path.dirname(data_path) + '/stim_start_samples.npy', trial_num.stim_start * 30000)
-    np.save(os.path.dirname(data_path) + '/stim_end_samples.npy', trial_num.stim_end * 30000)
+    trial_num['stim_start'] = imec_flips[:, 0] / fs
+    trial_num['stim_end'] = imec_flips[:, 1] / fs
+    np.save(os.path.dirname(data_path) + '/stim_start_samples.npy', trial_num.stim_start * fs)
+    np.save(os.path.dirname(data_path) + '/stim_end_samples.npy', trial_num.stim_end * fs)
 else:
     trial_num['stim_start'] = np.load(data_folder + 'stim_start_samples.npy') / 30000
     trial_num['stim_end'] = np.load(data_folder + 'stim_end_samples.npy') / 30000
