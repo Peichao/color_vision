@@ -131,10 +131,12 @@ def build_hartley(analyzer_path):
     analyzer_complete = sio.loadmat(analyzer_path, squeeze_me=True, struct_as_record=False)
     analyzer = analyzer_complete['Analyzer']
 
-    x_size = analyzer.P.param[5][2]
-    y_size = analyzer.P.param[6][2]
-    min_sf = analyzer.P.param[17][2]
-    max_sf = analyzer.P.param[18][2]
+    params = analyzer_params(analyzer_path)
+
+    x_size = params['x_size']
+    y_size = params['y_size']
+    min_sf = params['min_sf']
+    max_sf = params['max_sf']
 
     screen_xcm = analyzer.M.screenXcm
     screen_ycm = analyzer.M.screenYcm
